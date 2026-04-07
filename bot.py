@@ -62,7 +62,7 @@ def get_main_keyboard():
         [KeyboardButton("🤖 Коуч"), KeyboardButton("🌟 Звёзды сегодня")],
         [KeyboardButton("💎 PRO-доступ")],
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 
 # ========================
@@ -1065,11 +1065,21 @@ async def newgoal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     db.ensure_user(user_id)
     creating_goals[user_id] = {}
 
-    await update.message.reply_text(
-        "🎯 *Новая цель или проект*\n\nКак называется твоя цель? Напиши кратко и ёмко.",
-        parse_mode="Markdown",
-        reply_markup=ReplyKeyboardRemove()
-    )
+    text = "🎯 *Новая цель или проект*\n\nКак называется твоя цель? Напиши кратко и ёмко."
+
+    if update.callback_query:
+        await update.callback_query.answer()
+        await update.callback_query.message.reply_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove()
+        )
+    else:
+        await update.message.reply_text(
+            text,
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove()
+        )
     return GOAL_TITLE
 
 
