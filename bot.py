@@ -1,6 +1,7 @@
 """
-Коуч-Трекер Telegram Bot — версия 2.0
+Коуч-Трекер Telegram Bot — версия 2.1
 Главное меню на кнопках. PRO-монетизация. Коуч с лимитом.
+Умные триггеры. Астро-советы. Предложение закрепить.
 """
 
 import os
@@ -58,7 +59,8 @@ def get_main_keyboard():
     keyboard = [
         [KeyboardButton("🎯 Мои цели и проекты"), KeyboardButton("⚡ Фокус на сегодня")],
         [KeyboardButton("✅ Отметить прогресс"), KeyboardButton("🔥 Энергия и драйв")],
-        [KeyboardButton("🤖 Коуч"), KeyboardButton("💎 PRO-доступ")],
+        [KeyboardButton("🤖 Коуч"), KeyboardButton("🌟 Звёзды сегодня")],
+        [KeyboardButton("💎 PRO-доступ")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, persistent=True)
 
@@ -98,6 +100,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
+    # Предложение закрепить бот (один раз при первом входе)
+    user_data = db.get_user(user.id)
+    if user_data:
+        created = datetime.fromisoformat(user_data["created_at"])
+        # Показываем только если пользователь создан меньше минуты назад (новый)
+        if (datetime.utcnow() - created).total_seconds() < 60:
+            await update.message.reply_text(
+                "📌 *Совет:* Закрепи этот чат вверху списка диалогов — "
+                "так ты не пропустишь ни одно напоминание и мотивацию.\n\n"
+                "Для этого: зажми этот чат → Закрепить 📌",
+                parse_mode="Markdown"
+            )
+
 
 # ========================
 # Обработчики кнопок главного меню
@@ -106,6 +121,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     user_id = update.effective_user.id
+    context.user_data.pop("coach_mode", None)  # выход из коуч-режима при нажатии любой кнопки меню
 
     if text == "🎯 Мои цели и проекты":
         await show_goals(update, context)
@@ -117,6 +133,8 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_motivation(update, context)
     elif text == "🤖 Коуч":
         await start_coach(update, context)
+    elif text == "🌟 Звёзды сегодня":
+        await stars_today(update, context)
     elif text == "💎 PRO-доступ":
         await show_pro_menu(update, context)
 
@@ -306,8 +324,9 @@ async def send_motivation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     stats = db.get_user_stats(user_id)
 
-    text = f"🔥 *Энергия и драйв*\n\n"
-    text += f"_{mot.get_motivation()}_\n\n"
+    # Главное — цитата из базы 100
+    quote = mot.get_random_quote()
+    text = f"🔥 *Энергия и драйв*\n\n{quote}\n\n"
 
     if stats["streak"] > 0:
         streak_msg = mot.get_streak_message(stats["streak"])
@@ -320,7 +339,103 @@ async def send_motivation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text += f"• Этапов выполнено: {stats['completed_milestones']}\n"
     text += f"• Активных проектов: {stats['active_goals']}\n"
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+    more_buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔥 Ещё цитату", callback_data="quick_motivation"),
+         InlineKeyboardButton("⚡ Фокус", callback_data="quick_focus")],
+    ])
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=more_buttons)
+
+
+# ========================
+# 🌟 Звёзды сегодня
+# ========================
+
+async def stars_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Астро-советы — только после разбора личности (нужна дата/время рождения)."""
+    user_id = update.effective_user.id
+
+    # Проверяем профиль
+    profile = db.get_user_profile(user_id)
+    if not profile or not profile.get("birth_date"):
+        await update.message.reply_text(
+            "🌟 *Звёзды сегодня*\n\n"
+            "Чтобы получить персональный астро-брифинг, мне нужны твои данные рождения.\n\n"
+            "Пройди разбор личности — это займёт 3 минуты, "
+            "и после этого каждый день будешь получать личный астро-брифинг "
+            "с советами по переговорам, финансам и бизнесу.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔮 Пройти разбор личности", callback_data="start_analyze")],
+            ])
+        )
+        return
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        await update.message.reply_text("Функция временно недоступна. Попробуй позже.")
+        return
+
+    await update.message.chat.send_action("typing")
+
+    goals = db.get_active_goals(user_id)
+    today = datetime.now().strftime("%d.%m.%Y, %A")
+    name = profile.get("full_name", "")
+    birth_date = profile.get("birth_date", "")
+    birth_city = profile.get("birth_city", "")
+    birth_time = profile.get("birth_time", "не указано")
+    analysis = profile.get("analysis_result", "")[:800]
+
+    goals_text = ""
+    if goals:
+        goals_text = "\nАктивные цели: " + ", ".join(g['title'] for g in goals[:5])
+
+    prompt = (
+        f"Персональный астро-брифинг для предпринимателя.\n\n"
+        f"Имя: {name}\n"
+        f"Дата рождения: {birth_date}\n"
+        f"Город рождения: {birth_city}\n"
+        f"Время рождения: {birth_time}\n"
+        f"Сегодня: {today}\n"
+        f"{goals_text}\n\n"
+        f"Краткий психопрофиль:\n{analysis}\n\n"
+        "Дай персональный астро-брифинг именно для этого человека на сегодня:\n"
+        "🌟 ЭНЕРГИЯ ДНЯ — транзиты относительно его натальной карты, что это значит для бизнеса\n"
+        "🤝 ПЕРЕГОВОРЫ — лучшее время для важных встреч, стиль переговоров на сегодня, чего избегать\n"
+        "💰 ДЕНЬГИ — финансовый совет с учётом его психотипа и звёзд\n"
+        "🎯 ГЛАВНЫЙ СОВЕТ — одно конкретное действие для продвижения к его целям\n\n"
+        "Стиль: уверенный, конкретный, как личный консультант. "
+        "Обращайся по имени. Отвечай на русском. Максимум 300 слов."
+    )
+
+    try:
+        from openai import AsyncOpenAI
+        client = AsyncOpenAI(api_key=api_key)
+
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": (
+                    "Ты — персональный астролог-консультант для предпринимателей и топ-менеджеров. "
+                    "Ты знаешь натальную карту клиента и текущие транзиты. "
+                    "Твои советы опираются на астрологию, но подаются как практичные бизнес-рекомендации. "
+                    "Особое внимание: переговоры, финансы, тайминг важных решений. "
+                    "Отвечай на русском."
+                )},
+                {"role": "user", "content": prompt},
+            ],
+            max_tokens=600,
+            temperature=0.8,
+        )
+
+        result = response.choices[0].message.content
+        await update.message.reply_text(
+            f"🌟 *Звёзды сегодня*\n\n{result}",
+            parse_mode="Markdown"
+        )
+
+    except Exception as e:
+        logger.error(f"Stars today error: {e}")
+        await update.message.reply_text("Не удалось получить астро-брифинг. Попробуй через минуту.")
 
 
 # ========================
@@ -561,6 +676,29 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"{mot.get_milestone_praise()}\n\nЭтап отмечен как выполненный! ✅"
         )
 
+        # === УМНЫЙ ТРИГГЕР: после каждого этапа — CTA кнопки ===
+        cta_buttons = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🔥 Порция мотивации", callback_data="quick_motivation"),
+             InlineKeyboardButton("⚡ Фокус", callback_data="quick_focus")],
+        ])
+        await query.message.reply_text(
+            f"{mot.get_reminder_cta()} Продолжай в том же духе!",
+            reply_markup=cta_buttons
+        )
+
+        # === УМНЫЙ ТРИГГЕР: после 3-го этапа — предложить анализ или коуч ===
+        completed_total = db.get_user_stats(user_id).get("completed_milestones", 0)
+        if completed_total > 0 and completed_total % 3 == 0:
+            trigger_3_text = mot.get_milestone_3_trigger()
+            trigger_3_buttons = InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔮 Разбор личности", callback_data="start_analyze")],
+                [InlineKeyboardButton("🤖 Поговорить с коучем", callback_data="start_coach_from_trigger")],
+            ])
+            await query.message.reply_text(
+                trigger_3_text,
+                reply_markup=trigger_3_buttons
+            )
+
     # Отметить этап из детали цели
     elif data.startswith("done_"):
         goal_id = int(data.split("_")[1])
@@ -645,6 +783,67 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "pro_roadmap":
         await handle_pro_roadmap(update, context)
+
+    # === УМНЫЕ ТРИГГЕРЫ: CTA кнопки ===
+    elif data == "quick_motivation":
+        quote = mot.get_random_quote()
+        await query.edit_message_text(
+            f"🔥 *Энергия и драйв*\n\n{quote}",
+            parse_mode="Markdown"
+        )
+
+    elif data == "quick_focus":
+        goals = db.get_active_goals(user_id)
+        if not goals:
+            await query.edit_message_text("У тебя нет активных целей. Создай первую — кнопка 🎯 в меню!")
+        else:
+            text = "⚡ *Фокус:*\n\n"
+            for goal in goals[:3]:
+                milestones = db.get_milestones(goal["id"])
+                pending = [m for m in milestones if m["status"] == "pending"]
+                if pending:
+                    text += f"🎯 *{goal['title']}*\n→ {pending[0]['title']}\n\n"
+            text += f"\n_{mot.get_morning_motivation()}_"
+            await query.edit_message_text(text, parse_mode="Markdown")
+
+    elif data == "setup_reminders":
+        # Перенаправляем на настройки напоминаний
+        settings = db.get_user_settings(user_id)
+        await query.edit_message_text(
+            _settings_text(settings),
+            parse_mode="Markdown",
+            reply_markup=_settings_keyboard(settings)
+        )
+
+    elif data == "start_analyze":
+        # Запуск анализа личности
+        await query.edit_message_text(
+            "🔮 Для разбора личности используй команду /analyze\n\n"
+            "Я задам несколько вопросов — это займёт около 3 минут.\n"
+            "После этого ты получишь подробный профиль и доступ к 🌟 Звёзды сегодня.",
+            parse_mode="Markdown"
+        )
+
+    elif data == "start_coach_from_trigger":
+        # Активируем коуч-режим
+        context.user_data["coach_mode"] = True
+        has_pro = db.has_pro_access(user_id) or db.has_pro_subscription(user_id)
+        if has_pro:
+            coach_text = (
+                "🤖 *Коуч на связи*\n\n"
+                "👑 У тебя PRO — без ограничений. Что тебя беспокоит прямо сейчас?"
+            )
+        else:
+            remaining = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
+            coach_text = mot.COACH_WELCOME.format(remaining=remaining)
+        await query.edit_message_text(coach_text, parse_mode="Markdown")
+        await query.message.reply_text(
+            "Напиши свой вопрос 👇",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("🏠 Главное меню")]],
+                resize_keyboard=True
+            )
+        )
 
 
 # ========================
@@ -1014,6 +1213,19 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
         parse_mode="Markdown"
     )
 
+    # === УМНЫЙ ТРИГГЕР: после создания цели предложить напоминания + мотивацию ===
+    trigger_text = mot.get_goal_created_trigger()
+    trigger_buttons = InlineKeyboardMarkup([
+        [InlineKeyboardButton("⏰ Настроить напоминания", callback_data="setup_reminders")],
+        [InlineKeyboardButton("🔥 Порция мотивации", callback_data="quick_motivation")],
+        [InlineKeyboardButton("⚡ Фокус на сегодня", callback_data="quick_focus")],
+    ])
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=trigger_text,
+        reply_markup=trigger_buttons
+    )
+
     # Возвращаем главное меню
     await context.bot.send_message(
         chat_id=user_id,
@@ -1065,19 +1277,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎯 *Мои цели и проекты* — все твои активные цели\n"
         "⚡ *Фокус на сегодня* — что делать прямо сейчас\n"
         "✅ *Отметить прогресс* — отметить выполненный этап\n"
-        "🔥 *Энергия и драйв* — мотивация и статистика\n"
+        "🔥 *Энергия и драйв* — мотивация от лучших мировых лидеров\n"
         "🤖 *Коуч* — чат с AI-коучем (20 сообщений/день бесплатно)\n"
+        "🌟 *Звёзды сегодня* — персональный астро-брифинг\n"
         "💎 *PRO-доступ* — разблокировать мощные инструменты\n\n"
         "*Команды:*\n"
         "/newgoal — создать новую цель\n"
-        "/analyze — анализ личности (PRO)\n"
+        "/analyze — анализ личности\n"
         "/stats — твоя статистика\n"
         "/settings — настройки напоминаний\n"
         "/start — главное меню\n\n"
         "*PRO-функции:*\n"
         "🧠 Предпринимательский профиль\n"
         "🧪 Профайлинг (MBTI + Gallup)\n"
-        "🚀 Индивидуальная стратегия роста"
+        "🚀 Индивидуальная стратегия роста\n"
+        "🌟 Персональные астро-советы"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
@@ -1247,7 +1461,7 @@ def build_application(token: str) -> Application:
 
     # Кнопки главного меню
     app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex("^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|💎 PRO-доступ)$"),
+        filters.TEXT & filters.Regex("^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🌟 Звёзды сегодня|💎 PRO-доступ)$"),
         handle_menu_button
     ))
 

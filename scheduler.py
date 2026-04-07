@@ -92,8 +92,7 @@ async def check_deadline_reminders(bot):
                             f"📌 Этап: *{ms['title']}*\n"
                             f"🎯 Цель: {ms['goal_title']}\n"
                             f"Срок был: {deadline.strftime('%d.%m.%Y')}\n\n"
-                            "Отметь как выполненный: /done\n"
-                            "Или пересмотри сроки у цели."
+                            "Нажми ✅ Отметить прогресс в меню"
                         )
                     )
                     continue
@@ -106,7 +105,7 @@ async def check_deadline_reminders(bot):
                             f"{mot.get_deadline_message(0)}\n\n"
                             f"📌 Этап: *{ms['title']}*\n"
                             f"🎯 Цель: {ms['goal_title']}\n\n"
-                            "Отметь как выполненный: /done"
+                            "Нажми ✅ Отметить прогресс в меню"
                         )
                     )
                     continue
@@ -180,7 +179,7 @@ async def _send_deadline_notification(
         f"📌 Этап: *{ms_title}*\n"
         f"🎯 Цель: {goal_title}\n"
         f"{detail} ({deadline.strftime('%d.%m.%Y')})\n\n"
-        "Отметь прогресс: /done"
+        "Нажми ✅ Отметить прогресс в меню"
     )
     await _send_if_not_sent_today(
         bot, user_id,
@@ -210,7 +209,7 @@ def _build_goal_deadline_text(goal_title, deadline, days_left, total_days, notif
         f"{header}\n\n"
         f"🎯 Цель: *{goal_title}*\n"
         f"{detail} ({deadline.strftime('%d.%m.%Y')})\n\n"
-        "Посмотреть цель: /goals"
+        "Нажми 🎯 Мои цели в меню"
     )
 
 
@@ -278,8 +277,16 @@ async def send_daily_digests(bot):
                     if today_count > 0:
                         text += f"🔥 Сегодня дедлайн у {today_count} этапов\n"
                     text += f"📋 Активных целей: {len(goals)}\n"
-                    text += "\nПосмотри план на день: /today"
-                    await bot.send_message(chat_id=user_id, text=text)
+                    text += f"\n_{mot.get_random_quote()}_"
+                    morning_kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("⚡ Фокус на сегодня", callback_data="quick_focus")],
+                        [InlineKeyboardButton("🔥 Ещё мотивацию", callback_data="quick_motivation")],
+                    ])
+                    await bot.send_message(
+                        chat_id=user_id, text=text,
+                        parse_mode="Markdown",
+                        reply_markup=morning_kb
+                    )
                     logger.info(f"Morning digest sent to user {user_id}")
 
             # Вечерний дайджест
@@ -294,8 +301,15 @@ async def send_daily_digests(bot):
                     text = mot.get_evening_check() + "\n\n"
                     if stats["streak"] > 1:
                         text += f"🔥 Серия: {stats['streak']} дней подряд!\n"
-                    text += "Отметь выполненное: /done"
-                    await bot.send_message(chat_id=user_id, text=text)
+                    evening_kb = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✅ Отметить прогресс", callback_data="quick_focus")],
+                        [InlineKeyboardButton("🔥 Мотивация", callback_data="quick_motivation")],
+                    ])
+                    await bot.send_message(
+                        chat_id=user_id, text=text,
+                        parse_mode="Markdown",
+                        reply_markup=evening_kb
+                    )
                     logger.info(f"Evening digest sent to user {user_id}")
 
         except Exception as e:
@@ -317,32 +331,35 @@ async def check_expiring_subscriptions(bot):
             expires = datetime.fromisoformat(user["subscription_expires_at"])
             days_left = (expires.date() - now.date()).days
 
+            pro_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("👑 Продлить PRO-подписку", callback_data="pro_sub_buy")],
+            ])
             if days_left == 3:
                 await bot.send_message(
                     chat_id=user["user_id"],
                     text=(
                         "⏰ Подписка заканчивается через 3 дня!\n\n"
-                        "Продли сейчас, чтобы не потерять доступ к напоминаниям и трекингу.\n"
-                        "Жми /subscribe"
-                    )
+                        "Продли сейчас, чтобы не потерять доступ к коучу и напоминаниям."
+                    ),
+                    reply_markup=pro_kb
                 )
             elif days_left == 1:
                 await bot.send_message(
                     chat_id=user["user_id"],
                     text=(
                         "🚨 Подписка заканчивается ЗАВТРА!\n\n"
-                        "Не теряй свой прогресс — продли подписку!\n"
-                        "Жми /subscribe"
-                    )
+                        "Не теряй свой прогресс — продли подписку!"
+                    ),
+                    reply_markup=pro_kb
                 )
             elif days_left == 0:
                 await bot.send_message(
                     chat_id=user["user_id"],
                     text=(
                         "😔 Подписка закончилась сегодня.\n\n"
-                        "Все твои цели сохранены и ждут тебя!\n"
-                        "Продли подписку чтобы продолжить: /subscribe"
-                    )
+                        "Все твои цели сохранены и ждут тебя!"
+                    ),
+                    reply_markup=pro_kb
                 )
         except Exception as e:
             logger.error(f"Subscription check error for user {user['user_id']}: {e}")
@@ -364,6 +381,10 @@ async def check_expiring_trials(bot):
             trial_end = trial_start + timedelta(days=db.TRIAL_DAYS)
             days_left = (trial_end.date() - now.date()).days
 
+            trial_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 PRO-доступ — 950 Stars", callback_data="pro_buy")],
+                [InlineKeyboardButton("👑 PRO-подписка — 1450 Stars/мес", callback_data="pro_sub_buy")],
+            ])
             if days_left == 7:
                 await bot.send_message(
                     chat_id=user["user_id"],
@@ -371,28 +392,26 @@ async def check_expiring_trials(bot):
                         "📢 Уже 3 недели вместе! 🎉\n\n"
                         "Ты отлично двигаешься к своим целям! "
                         "Через 7 дней закончится бесплатный период.\n\n"
-                        "Хочешь продолжить? Оформи подписку заранее — "
-                        "она начнётся после trial.\n"
-                        "Жми /subscribe"
-                    )
+                        "Хочешь продолжить без ограничений?"
+                    ),
+                    reply_markup=trial_kb
                 )
             elif days_left == 3:
                 await bot.send_message(
                     chat_id=user["user_id"],
                     text=(
-                        "⏰ До конца бесплатного периода осталось 3 дня!\n\n"
-                        "Оформи подписку, чтобы не потерять доступ к напоминаниям.\n"
-                        "Жми /subscribe"
-                    )
+                        "⏰ До конца бесплатного периода осталось 3 дня!"
+                    ),
+                    reply_markup=trial_kb
                 )
             elif days_left == 1:
                 await bot.send_message(
                     chat_id=user["user_id"],
                     text=(
                         "🚨 Завтра заканчивается бесплатный период!\n\n"
-                        "Не упусти момент — подпишись сейчас!\n"
-                        "Жми /subscribe"
-                    )
+                        "Не упусти момент — PRO откроет полный доступ!"
+                    ),
+                    reply_markup=trial_kb
                 )
         except Exception as e:
             logger.error(f"Trial check error for user {user['user_id']}: {e}")
