@@ -1,6 +1,6 @@
 """
 Модуль для работы с базой данных SQLite.
-Хранит цели, этапы, подписки и историю действий пользователя.
+Хранит цели, этапы, подписки, PRO-доступ и историю действий пользователя.
 """
 
 import sqlite3
@@ -113,6 +113,35 @@ def init_db():
             deadline_mode TEXT DEFAULT 'both',
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
+
+        CREATE TABLE IF NOT EXISTS pro_purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            product TEXT NOT NULL,
+            telegram_payment_charge_id TEXT NOT NULL,
+            amount INTEGER NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS coach_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            used_date TEXT NOT NULL,
+            messages_count INTEGER DEFAULT 0,
+            total_minutes INTEGER DEFAULT 0,
+            UNIQUE(user_id, used_date),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS coach_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
     """)
     conn.commit()
     conn.close()
@@ -146,19 +175,12 @@ TRIAL_DAYS = 30
 
 
 def get_subscription_status(user_id: int) -> dict:
-    """
-    Возвращает статус подписки:
-    - status: 'trial', 'active', 'expired'
-    - days_left: дней до окончания
-    - expires_at: дата окончания
-    """
     user = get_user(user_id)
     if not user:
         return {"status": "expired", "days_left": 0, "expires_at": None}
 
     now = datetime.utcnow()
 
-    # Проверяем активную подписку
     if user["subscription_active"] and user["subscription_expires_at"]:
         expires = datetime.fromisoformat(user["subscription_expires_at"])
         if expires > now:
@@ -169,7 +191,6 @@ def get_subscription_status(user_id: int) -> dict:
                 "expires_at": expires.strftime("%d.%m.%Y"),
             }
 
-    # Проверяем trial
     if user["trial_started_at"]:
         trial_start = datetime.fromisoformat(user["trial_started_at"])
         trial_end = trial_start + timedelta(days=TRIAL_DAYS)
@@ -185,13 +206,11 @@ def get_subscription_status(user_id: int) -> dict:
 
 
 def is_subscription_valid(user_id: int) -> bool:
-    """Проверить, есть ли у пользователя доступ (trial или подписка)."""
     status = get_subscription_status(user_id)
     return status["status"] in ("trial", "active")
 
 
 def activate_subscription(user_id: int, days: int = 30):
-    """Активировать или продлить подписку на N дней."""
     conn = get_connection()
     user = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
     now = datetime.utcnow()
@@ -199,7 +218,6 @@ def activate_subscription(user_id: int, days: int = 30):
     if user and user["subscription_active"] and user["subscription_expires_at"]:
         current_expires = datetime.fromisoformat(user["subscription_expires_at"])
         if current_expires > now:
-            # Продлеваем от текущей даты окончания
             new_expires = current_expires + timedelta(days=days)
         else:
             new_expires = now + timedelta(days=days)
@@ -216,7 +234,6 @@ def activate_subscription(user_id: int, days: int = 30):
 
 def save_payment(user_id: int, telegram_charge_id: str, provider_charge_id: str,
                  amount: int, currency: str, payload: str):
-    """Сохранить информацию об оплате."""
     conn = get_connection()
     conn.execute(
         "INSERT INTO payments (user_id, telegram_payment_charge_id, provider_payment_charge_id, amount, currency, payload) VALUES (?, ?, ?, ?, ?, ?)",
@@ -226,6 +243,105 @@ def save_payment(user_id: int, telegram_charge_id: str, provider_charge_id: str,
         "INSERT INTO activity_log (user_id, action, details) VALUES (?, ?, ?)",
         (user_id, "payment", f"Оплата: {amount} {currency}")
     )
+    conn.commit()
+    conn.close()
+
+
+# --- PRO-доступ ---
+
+# PRO: 950 Stars ≈ $19 (1 Star ≈ $0.02)
+PRO_PRICE_STARS = int(os.getenv("PRO_PRICE_STARS", "950"))
+# Подписка PRO: 1450 Stars ≈ $29/мес
+PRO_SUB_PRICE_STARS = int(os.getenv("PRO_SUB_PRICE_STARS", "1450"))
+
+
+def has_pro_access(user_id: int) -> bool:
+    """Проверить, куплен ли PRO-доступ (разовая покупка)."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT id FROM pro_purchases WHERE user_id = ? AND product = 'pro_bundle'",
+        (user_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def has_pro_subscription(user_id: int) -> bool:
+    """Проверить, есть ли активная PRO-подписка."""
+    # PRO-подписка использует ту же таблицу payments, но с payload='pro_subscription'
+    # и активируется через activate_subscription
+    return is_subscription_valid(user_id) and get_subscription_status(user_id)["status"] == "active"
+
+
+def save_pro_purchase(user_id: int, product: str, telegram_charge_id: str, amount: int):
+    conn = get_connection()
+    conn.execute(
+        "INSERT OR IGNORE INTO pro_purchases (user_id, product, telegram_payment_charge_id, amount) VALUES (?, ?, ?, ?)",
+        (user_id, product, telegram_charge_id, amount)
+    )
+    conn.execute(
+        "INSERT INTO activity_log (user_id, action, details) VALUES (?, ?, ?)",
+        (user_id, "pro_purchase", f"PRO куплен: {product}")
+    )
+    conn.commit()
+    conn.close()
+
+
+# --- Коуч-лимит ---
+
+FREE_COACH_MESSAGES_PER_DAY = 20
+
+
+def get_coach_messages_today(user_id: int) -> int:
+    """Сколько сообщений коучу отправлено сегодня."""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT messages_count FROM coach_usage WHERE user_id = ? AND used_date = ?",
+        (user_id, today)
+    ).fetchone()
+    conn.close()
+    return row["messages_count"] if row else 0
+
+
+def increment_coach_messages(user_id: int):
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    conn = get_connection()
+    conn.execute("""
+        INSERT INTO coach_usage (user_id, used_date, messages_count)
+        VALUES (?, ?, 1)
+        ON CONFLICT(user_id, used_date) DO UPDATE SET messages_count = messages_count + 1
+    """, (user_id, today))
+    conn.commit()
+    conn.close()
+
+
+def can_use_coach_free(user_id: int) -> bool:
+    return get_coach_messages_today(user_id) < FREE_COACH_MESSAGES_PER_DAY
+
+
+def get_coach_history(user_id: int, limit: int = 10) -> list:
+    conn = get_connection()
+    rows = conn.execute(
+        "SELECT role, content FROM coach_history WHERE user_id = ? ORDER BY created_at DESC LIMIT ?",
+        (user_id, limit)
+    ).fetchall()
+    conn.close()
+    return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+
+def save_coach_message(user_id: int, role: str, content: str):
+    conn = get_connection()
+    conn.execute(
+        "INSERT INTO coach_history (user_id, role, content) VALUES (?, ?, ?)",
+        (user_id, role, content)
+    )
+    # Храним только последние 50 сообщений на пользователя
+    conn.execute("""
+        DELETE FROM coach_history WHERE user_id = ? AND id NOT IN (
+            SELECT id FROM coach_history WHERE user_id = ? ORDER BY created_at DESC LIMIT 50
+        )
+    """, (user_id, user_id))
     conn.commit()
     conn.close()
 
@@ -397,7 +513,6 @@ def get_user_profile(user_id: int) -> dict | None:
 
 
 def save_user_profile(user_id: int, **kwargs):
-    """Сохранить/обновить поля профиля пользователя."""
     existing = get_user_profile(user_id)
     if not existing:
         conn = get_connection()
@@ -415,7 +530,6 @@ def save_user_profile(user_id: int, **kwargs):
 
 
 def profile_is_complete(user_id: int) -> bool:
-    """Проверить, заполнены ли все обязательные поля профиля."""
     p = get_user_profile(user_id)
     if not p:
         return False
@@ -441,12 +555,11 @@ DEFAULT_SETTINGS = {
     "evening_hour": 20,
     "morning_enabled": 1,
     "evening_enabled": 1,
-    "deadline_mode": "both",  # 'smart' | 'fixed' | 'both'
+    "deadline_mode": "both",
 }
 
 
 def get_user_settings(user_id: int) -> dict:
-    """Получить настройки пользователя. Возвращает дефолты если не заданы."""
     conn = get_connection()
     row = conn.execute(
         "SELECT * FROM user_settings WHERE user_id = ?", (user_id,)
@@ -454,12 +567,10 @@ def get_user_settings(user_id: int) -> dict:
     conn.close()
     if row:
         return dict(row)
-    # Вернуть дефолтные настройки
     return {"user_id": user_id, **DEFAULT_SETTINGS}
 
 
 def save_user_settings(user_id: int, **kwargs):
-    """Сохранить настройки пользователя (INSERT OR REPLACE)."""
     current = get_user_settings(user_id)
     current.update(kwargs)
     conn = get_connection()
