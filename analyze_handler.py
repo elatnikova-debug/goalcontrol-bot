@@ -432,8 +432,12 @@ async def _send_long_message_to_chat(bot, chat_id: int, text: str, chunk_size: i
         await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
 
-def build_analyze_conversation() -> ConversationHandler:
+def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
     """Собрать и вернуть ConversationHandler для /analyze."""
+    fallbacks = [CommandHandler("cancel", cancel_analyze)]
+    if extra_fallbacks:
+        fallbacks = extra_fallbacks + fallbacks
+
     return ConversationHandler(
         entry_points=[CommandHandler("analyze", analyze_command)],
         states={
@@ -465,6 +469,6 @@ def build_analyze_conversation() -> ConversationHandler:
                 MessageHandler(filters.PHOTO, got_left_palm)
             ],
         },
-        fallbacks=[CommandHandler("cancel", cancel_analyze)],
+        fallbacks=fallbacks,
         allow_reentry=True,
     )

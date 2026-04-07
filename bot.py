@@ -70,48 +70,76 @@ def get_main_keyboard():
 # ========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    db.ensure_user(user.id, user.username, user.first_name)
+    logger.info("=== START HANDLER CALLED ===")
+    try:
+        user = update.effective_user
+        logger.info(f"User: {user.id} / {user.first_name}")
+        db.ensure_user(user.id, user.username, user.first_name)
 
-    name = user.first_name or "предприниматель"
-    sub = db.get_subscription_status(user.id)
+        name = user.first_name or "предприниматель"
 
-    if sub["status"] == "trial":
-        status_text = f"🆓 Пробный период: {sub['days_left']} дней осталось"
-    elif sub["status"] == "active":
-        status_text = f"👑 PRO-подписка активна до {sub['expires_at']}"
-    else:
-        status_text = "⏰ Пробный период завершён"
+        try:
+            sub = db.get_subscription_status(user.id)
+            if sub["status"] == "trial":
+                status_text = f"🆓 Пробный период: {sub['days_left']} дней осталось"
+            elif sub["status"] == "active":
+                status_text = f"👑 PRO-подписка активна до {sub['expires_at']}"
+            else:
+                status_text = "⏰ Пробный период завершён"
+        except Exception as e:
+            logger.error(f"Error getting subscription: {e}")
+            status_text = ""
 
-    has_pro = db.has_pro_access(user.id)
-    pro_text = "💎 PRO-доступ: активен" if has_pro else ""
+        try:
+            has_pro = db.has_pro_access(user.id)
+            pro_text = "💎 PRO-доступ: активен" if has_pro else ""
+        except Exception as e:
+            logger.error(f"Error checking pro: {e}")
+            pro_text = ""
 
-    text = (
-        f"Привет, {name}! 🚀\n\n"
-        f"Я твой персональный коуч-трекер для предпринимателей.\n"
-        f"Помогаю ставить цели, держать фокус и расти быстрее.\n\n"
-        f"{status_text}\n"
-        f"{pro_text}\n\n"
-        f"Выбери действие в меню ниже 👇"
-    )
+        text = (
+            f"Привет, {name}! 🚀\n\n"
+            f"Я твой персональный коуч-трекер для предпринимателей.\n"
+            f"Помогаю ставить цели, держать фокус и расти быстрее.\n\n"
+            f"{status_text}\n"
+            f"{pro_text}\n\n"
+            f"Выбери действие в меню ниже 👇"
+        )
 
-    await update.message.reply_text(
-        text.strip(),
-        reply_markup=get_main_keyboard()
-    )
+        kb = get_main_keyboard()
+        logger.info(f"Keyboard created: {type(kb).__name__}, buttons={len(kb.keyboard)} rows")
 
-    # Предложение закрепить бот (один раз при первом входе)
-    user_data = db.get_user(user.id)
-    if user_data:
-        created = datetime.fromisoformat(user_data["created_at"])
-        # Показываем только если пользователь создан меньше минуты назад (новый)
-        if (datetime.utcnow() - created).total_seconds() < 60:
+        await update.message.reply_text(
+            text.strip(),
+            reply_markup=kb
+        )
+        logger.info("=== START MESSAGE SENT WITH KEYBOARD ===")
+
+        # Предложение закрепить бот (один раз при первом входе)
+        try:
+            user_data = db.get_user(user.id)
+            if user_data:
+                created = datetime.fromisoformat(user_data["created_at"])
+                if (datetime.utcnow() - created).total_seconds() < 60:
+                    await update.message.reply_text(
+                        "📌 *Совет:* Закрепи этот чат вверху списка диалогов — "
+                        "так ты не пропустишь ни одно напоминание и мотивацию.\n\n"
+                        "Для этого: зажми этот чат → Закрепить 📌",
+                        parse_mode="Markdown"
+                    )
+        except Exception as e:
+            logger.error(f"Error in pin suggestion: {e}")
+
+    except Exception as e:
+        logger.error(f"CRITICAL ERROR in start(): {e}", exc_info=True)
+        # Аварийная отправка — без базы, без ничего, просто клавиатура
+        try:
             await update.message.reply_text(
-                "📌 *Совет:* Закрепи этот чат вверху списка диалогов — "
-                "так ты не пропустишь ни одно напоминание и мотивацию.\n\n"
-                "Для этого: зажми этот чат → Закрепить 📌",
-                parse_mode="Markdown"
+                "Привет! 🚀 Выбери действие в меню ниже 👇",
+                reply_markup=get_main_keyboard()
             )
+        except Exception as e2:
+            logger.error(f"FATAL: even fallback start failed: {e2}", exc_info=True)
 
 
 # ========================
@@ -1432,11 +1460,71 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ========================
+# Обработчик ошибок
+# ========================
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors caused by updates."""
+    logger.error("Exception while handling an update:", exc_info=context.error)
+
+
+# ========================
+# Fallback /start для ConversationHandler
+# ========================
+
+async def start_and_end_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/start из conversation — показываем меню и ВЫХОДИМ из диалога."""
+    logger.info("start_and_end_conversation called — exiting ConversationHandler")
+    await start(update, context)
+    return ConversationHandler.END
+
+
+async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """/cancel — отмена любого диалога, возврат к меню."""
+    logger.info("cancel_conversation called")
+    await update.message.reply_text(
+        "Отменено. Выбери действие в меню ниже 👇",
+        reply_markup=get_main_keyboard()
+    )
+    return ConversationHandler.END
+
+
+# ========================
+# Обработчик кнопок меню внутри ConversationHandler
+# ========================
+
+MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🌟 Звёзды сегодня|💎 PRO-доступ)$"
+
+
+async def menu_button_exits_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Кнопка меню нажата внутри conversation — выходим и обрабатываем."""
+    logger.info(f"Menu button '{update.message.text}' pressed inside conversation — exiting")
+    await handle_menu_button(update, context)
+    return ConversationHandler.END
+
+
+# ========================
 # Сборка приложения
 # ========================
 
 def build_application(token: str) -> Application:
     app = Application.builder().token(token).build()
+
+    # Обработчик ошибок
+    app.add_error_handler(error_handler)
+
+    # Общие fallback’ы для ConversationHandler’ов:
+    # /start выходит из диалога и показывает главное меню
+    # /cancel отменяет диалог
+    # Кнопки меню выходят из диалога и обрабатываются
+    common_fallbacks = [
+        CommandHandler("start", start_and_end_conversation),
+        CommandHandler("cancel", cancel_conversation),
+        MessageHandler(
+            filters.TEXT & filters.Regex(MENU_BUTTONS_PATTERN),
+            menu_button_exits_conversation
+        ),
+    ]
 
     # Создание цели
     goal_conv = ConversationHandler(
@@ -1455,40 +1543,44 @@ def build_application(token: str) -> Application:
             GOAL_MILESTONE_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_milestone_title_received)],
             GOAL_CONFIRM: [CallbackQueryHandler(goal_confirm_callback, pattern="^(confirm_goal|cancel_goal_creation)$")],
         },
-        fallbacks=[CommandHandler("start", start)],
+        fallbacks=common_fallbacks,
         allow_reentry=True,
     )
 
     # Анализ личности
-    analyze_conv = build_analyze_conversation()
+    analyze_conv = build_analyze_conversation(extra_fallbacks=common_fallbacks)
 
+    # === Порядок важен! ===
+    # 1. Команды (они должны работать всегда, даже вне диалогов)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("settings", settings_command))
+
+    # 2. ConversationHandler’ы (перехватывают текст когда активны)
     app.add_handler(goal_conv)
     app.add_handler(analyze_conv)
 
-    # Кнопки главного меню
+    # 3. Кнопки главного меню
     app.add_handler(MessageHandler(
-        filters.TEXT & filters.Regex("^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🌟 Звёзды сегодня|💎 PRO-доступ)$"),
+        filters.TEXT & filters.Regex(MENU_BUTTONS_PATTERN),
         handle_menu_button
     ))
 
-    # Настройки (callback)
+    # 4. Настройки (callback)
     app.add_handler(CallbackQueryHandler(
         settings_callback,
         pattern="^(set_mh_|set_eh_|toggle_morning|toggle_evening|set_mode_|save_settings|noop)"
     ))
 
-    # Оплата
+    # 5. Оплата
     app.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 
-    # Все остальные callback
+    # 6. Все остальные callback
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    # Свободный текст (коуч и прочее)
+    # 7. Свободный текст (коуч и прочее)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     return app

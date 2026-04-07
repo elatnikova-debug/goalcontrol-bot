@@ -35,11 +35,24 @@ def main():
     app = build_application(token)
     logger.info("Bot application created")
 
-    # Запускаем планировщик напоминаний в фоне
+    # Запускаем планировщик и настраиваем команды при старте
     async def post_init(application):
-        """Запустить scheduler после инициализации бота."""
+        """После инициализации бота: планировщик + команды."""
+        # Запускаем scheduler
         asyncio.create_task(scheduler_loop(application.bot))
         logger.info("Scheduler task created")
+
+        # Удаляем старое меню команд и убираем кнопку Menu
+        # чтобы она не мешала reply keyboard
+        try:
+            from telegram import BotCommand, MenuButtonDefault
+            # Удаляем все команды из меню
+            await application.bot.set_my_commands([])
+            # Ставим кнопку меню на дефолт (не "commands")
+            await application.bot.set_chat_menu_button(menu_button=MenuButtonDefault())
+            logger.info("Bot commands cleared, menu button set to default")
+        except Exception as e:
+            logger.warning(f"Could not update menu button: {e}")
 
     app.post_init = post_init
 
