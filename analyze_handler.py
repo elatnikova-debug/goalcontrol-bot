@@ -363,9 +363,8 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except ValueError as e:
         # OPENAI_API_KEY не задан
         await update.message.reply_text(
-            "⚠️ Для анализа личности нужен ключ OpenAI API.\n\n"
-            "Добавь переменную окружения `OPENAI_API_KEY` при деплое на Railway.\n"
-            "Получить ключ: https://platform.openai.com/api-keys"
+            "🔧 Анализ личности временно недоступен. Администратор уже работает над этим.\n\n"
+            "Попробуй снова чуть позже!"
         )
         logger.error(f"OpenAI API key missing: {e}")
 

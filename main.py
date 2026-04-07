@@ -8,7 +8,7 @@ import sys
 import asyncio
 import logging
 
-from bot import create_application
+from bot import build_application
 from database import init_db
 from scheduler import scheduler_loop
 
@@ -32,7 +32,7 @@ def main():
     logger.info("Database initialized")
 
     # Создаём приложение
-    app = create_application(token)
+    app = build_application(token)
     logger.info("Bot application created")
 
     # Запускаем планировщик напоминаний в фоне
