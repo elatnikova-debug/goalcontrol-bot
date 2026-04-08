@@ -8,7 +8,7 @@ import sys
 import asyncio
 import logging
 
-from bot import build_application
+from bot import build_application, BOT_VERSION
 from database import init_db
 from scheduler import scheduler_loop
 
@@ -57,7 +57,7 @@ def main():
     app.post_init = post_init
 
     # Запускаем бота
-    logger.info("Starting bot... (press Ctrl+C to stop)")
+    logger.info(f"Starting bot v{BOT_VERSION}... (press Ctrl+C to stop)")
     app.run_polling(
         allowed_updates=[
             "message",

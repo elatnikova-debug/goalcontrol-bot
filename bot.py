@@ -1,8 +1,10 @@
 """
-Коуч-Трекер Telegram Bot — версия 2.1
+Коуч-Трекер Telegram Bot — версия 2.2
 Главное меню на кнопках. PRO-монетизация. Коуч с лимитом.
 Умные триггеры. Астро-советы. Предложение закрепить.
 """
+
+BOT_VERSION = "2.2"
 
 import os
 import logging
@@ -103,7 +105,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Помогаю ставить цели, держать фокус и расти быстрее.\n\n"
             f"{status_text}\n"
             f"{pro_text}\n\n"
-            f"Выбери действие в меню ниже 👇"
+            f"Выбери действие в меню ниже 👇\n"
+            f"\n• v{BOT_VERSION}"
         )
 
         kb = get_main_keyboard()
