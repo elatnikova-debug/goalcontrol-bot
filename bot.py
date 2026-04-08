@@ -985,7 +985,7 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         prompt = (
             f"Ты — элитный бизнес-стратег и коуч для предпринимателей.\n\n"
             f"Активные цели предпринимателя:\n{goals_text}\n\n"
-            f"{'Анализ личности:\n' + analysis[:1500] if analysis else ''}\n\n"
+            f"{('Анализ личности:' + chr(10) + analysis[:1500]) if analysis else ''}\n\n"
             f"Создай ИНДИВИДУАЛЬНУЮ стратегию достижения этих целей:\n"
             f"1. Приоритизация целей (какую закрывать первой и почему)\n"
             f"2. Еженедельный ритм работы над целями\n"
