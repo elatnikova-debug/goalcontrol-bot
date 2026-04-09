@@ -501,7 +501,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
             ])
         )
-        return
+        return ConversationHandler.END
 
     # Проверяем анкету — если не пройдена, запускаем ConversationHandler
     if not db.has_coach_questionnaire(user_id):
@@ -542,6 +542,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
             resize_keyboard=True
         )
     )
+    return ConversationHandler.END
 
 
 # --- Анкета: 5 шагов ---
