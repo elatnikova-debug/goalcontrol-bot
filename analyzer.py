@@ -6,6 +6,7 @@
 import os
 import logging
 import base64
+import asyncio
 from openai import AsyncOpenAI
 
 logger = logging.getLogger(__name__)
@@ -180,17 +181,29 @@ async def analyze_personality(
     ]
 
     logger.info(f"Sending analysis request to GPT-4o for user data: {full_name}")
+    logger.info(f"Image sizes: face={len(face_photo_bytes)}B, right={len(right_palm_bytes)}B, left={len(left_palm_bytes)}B")
 
-    response = await client.chat.completions.create(
-        model="gpt-4o",
-        messages=messages,
-        max_tokens=4000,
-        temperature=0.7,
-    )
+    # Retry logic: GPT-4o vision can be flaky
+    last_error = None
+    for attempt in range(3):
+        try:
+            response = await client.chat.completions.create(
+                model="gpt-4o",
+                messages=messages,
+                max_tokens=4000,
+                temperature=0.7,
+            )
+            result = response.choices[0].message.content
+            logger.info("GPT-4o analysis completed successfully")
+            return result
+        except Exception as e:
+            last_error = e
+            logger.warning(f"GPT-4o attempt {attempt+1}/3 failed: {type(e).__name__}: {e}")
+            if attempt < 2:
+                await asyncio.sleep(3 * (attempt + 1))  # 3s, 6s backoff
 
-    result = response.choices[0].message.content
-    logger.info("GPT-4o analysis completed successfully")
-    return result
+    logger.error(f"GPT-4o analysis FAILED after 3 attempts: {last_error}")
+    raise last_error
 
 
 async def get_goal_advice(

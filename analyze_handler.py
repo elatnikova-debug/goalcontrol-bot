@@ -369,11 +369,27 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"OpenAI API key missing: {e}")
 
     except Exception as e:
-        await update.message.reply_text(
-            "😔 Произошла ошибка при анализе. Попробуй снова через минуту.\n"
-            "Если ошибка повторяется — напиши /analyze заново."
-        )
-        logger.error(f"Analysis error for user {user_id}: {e}", exc_info=True)
+        error_type = type(e).__name__
+        error_msg = str(e)[:200]
+        logger.error(f"Analysis error for user {user_id}: {error_type}: {error_msg}", exc_info=True)
+
+        # Более понятное сообщение в зависимости от типа ошибки
+        if "rate_limit" in error_msg.lower() or "429" in error_msg:
+            user_msg = (
+                "⏳ Слишком много запросов. Попробуй через 2-3 минуты.\n"
+                "Напиши /analyze чтобы начать заново."
+            )
+        elif "api_key" in error_msg.lower() or "auth" in error_msg.lower():
+            user_msg = (
+                "🔧 Анализ временно недоступен. Администратор уже работает над этим.\n"
+                "Попробуй чуть позже!"
+            )
+        else:
+            user_msg = (
+                "😔 Произошла ошибка при анализе. Попробуй снова через минуту.\n"
+                "Если ошибка повторяется — напиши /analyze заново."
+            )
+        await update.message.reply_text(user_msg)
 
     # Очищаем временные данные
     for key in ["profile_name", "profile_birthdate", "profile_birthcity",
@@ -471,4 +487,6 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
         },
         fallbacks=fallbacks,
         allow_reentry=True,
+        name="analyze_conv",
+        persistent=True,
     )

@@ -1511,7 +1511,10 @@ async def menu_button_exits_conversation(update: Update, context: ContextTypes.D
 # ========================
 
 def build_application(token: str) -> Application:
-    app = Application.builder().token(token).build()
+    from telegram.ext import PicklePersistence
+
+    persistence = PicklePersistence(filepath="bot_data.pickle")
+    app = Application.builder().token(token).persistence(persistence).build()
 
     # Обработчик ошибок
     app.add_error_handler(error_handler)
@@ -1548,6 +1551,8 @@ def build_application(token: str) -> Application:
         },
         fallbacks=common_fallbacks,
         allow_reentry=True,
+        name="goal_conv",
+        persistent=True,
     )
 
     # Анализ личности
