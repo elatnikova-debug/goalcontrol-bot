@@ -1580,6 +1580,11 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("stats_command: user_id=%s (type=%s), ADMIN_ID=%s (type=%s), match=%s",
                 user_id, type(user_id).__name__, ADMIN_ID, type(ADMIN_ID).__name__, user_id == ADMIN_ID)
 
+    # DEBUG: показать ID пользователя (убрать после отладки)
+    await update.message.reply_text(
+        f"🔧 DEBUG: your_id={user_id}, ADMIN_ID={ADMIN_ID}, match={user_id == ADMIN_ID}"
+    )
+
     # Если это админ — показываем дашборд бота
     if ADMIN_ID and user_id == ADMIN_ID:
         try:
