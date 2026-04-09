@@ -14,6 +14,9 @@ BOT_VERSION = "2.3.3"
 # ========================
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 import logging
+
+# Лог при загрузке модуля
+print(f"[BOOT] ADMIN_ID={ADMIN_ID}")
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -1574,6 +1577,7 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info("stats_command: user_id=%s, ADMIN_ID=%s, match=%s", user_id, ADMIN_ID, user_id == ADMIN_ID)
 
     # Если это админ — показываем дашборд бота
     if ADMIN_ID and user_id == ADMIN_ID:
