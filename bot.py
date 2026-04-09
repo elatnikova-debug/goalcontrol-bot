@@ -5,14 +5,14 @@
 Редактирование целей и этапов.
 """
 
+import os
+
 BOT_VERSION = "2.3.3"
 
 # ========================
 # Админ
 # ========================
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
-
-import os
 import logging
 from datetime import datetime, timedelta
 from telegram import (
