@@ -796,3 +796,112 @@ def get_coach_questionnaire(user_id: int) -> dict | None:
     ).fetchone()
     conn.close()
     return dict(row) if row else None
+
+
+# --- Админ-статистика ---
+
+def get_admin_stats() -> dict:
+    """Собирает полную статистику бота для администратора."""
+    conn = get_connection()
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    seven_days_ago = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    thirty_days_ago = (datetime.utcnow() - timedelta(days=30)).isoformat()
+
+    # --- Пользователи ---
+    total_users = conn.execute(
+        "SELECT COUNT(*) as cnt FROM users"
+    ).fetchone()["cnt"]
+
+    active_7d = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) as cnt FROM activity_log WHERE created_at >= ?",
+        (seven_days_ago,)
+    ).fetchone()["cnt"]
+
+    active_30d = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) as cnt FROM activity_log WHERE created_at >= ?",
+        (thirty_days_ago,)
+    ).fetchone()["cnt"]
+
+    new_today = conn.execute(
+        "SELECT COUNT(*) as cnt FROM users WHERE date(created_at) = ?",
+        (today,)
+    ).fetchone()["cnt"]
+
+    new_7d = conn.execute(
+        "SELECT COUNT(*) as cnt FROM users WHERE created_at >= ?",
+        (seven_days_ago,)
+    ).fetchone()["cnt"]
+
+    # --- Цели ---
+    total_goals = conn.execute(
+        "SELECT COUNT(*) as cnt FROM goals"
+    ).fetchone()["cnt"]
+
+    active_goals = conn.execute(
+        "SELECT COUNT(*) as cnt FROM goals WHERE status = 'active'"
+    ).fetchone()["cnt"]
+
+    completed_goals = conn.execute(
+        "SELECT COUNT(*) as cnt FROM goals WHERE status = 'completed'"
+    ).fetchone()["cnt"]
+
+    # --- Оплаты / тарифы ---
+    all_users_ids = conn.execute("SELECT user_id FROM users").fetchall()
+
+    tier_counts = {"free": 0, "lite": 0, "pro": 0, "premium": 0}
+    conn.close()
+
+    for row in all_users_ids:
+        t = get_user_tier(row["user_id"])
+        tier_counts[t] += 1
+
+    conn = get_connection()
+
+    total_revenue_stars = conn.execute(
+        "SELECT COALESCE(SUM(amount), 0) as total FROM payments"
+    ).fetchone()["total"]
+
+    # --- Коуч ---
+    questionnaire_count = conn.execute(
+        "SELECT COUNT(*) as cnt FROM coach_questionnaire"
+    ).fetchone()["cnt"]
+
+    total_coach_messages = conn.execute(
+        "SELECT COALESCE(SUM(messages_count), 0) as cnt FROM coach_usage"
+    ).fetchone()["cnt"]
+
+    # --- Конверсия ---
+    users_with_goals = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) as cnt FROM goals"
+    ).fetchone()["cnt"]
+
+    users_with_payment = conn.execute(
+        "SELECT COUNT(DISTINCT user_id) as cnt FROM pro_purchases"
+    ).fetchone()["cnt"]
+
+    conn.close()
+
+    goal_conversion = (users_with_goals / total_users * 100) if total_users > 0 else 0
+    payment_conversion = (users_with_payment / total_users * 100) if total_users > 0 else 0
+
+    return {
+        "total_users": total_users,
+        "active_7d": active_7d,
+        "active_30d": active_30d,
+        "new_today": new_today,
+        "new_7d": new_7d,
+        "total_goals": total_goals,
+        "active_goals": active_goals,
+        "completed_goals": completed_goals,
+        "tier_free": tier_counts["free"],
+        "tier_lite": tier_counts["lite"],
+        "tier_pro": tier_counts["pro"],
+        "tier_premium": tier_counts["premium"],
+        "total_revenue_stars": total_revenue_stars,
+        "questionnaire_count": questionnaire_count,
+        "total_coach_messages": total_coach_messages,
+        "users_with_goals": users_with_goals,
+        "users_with_payment": users_with_payment,
+        "goal_conversion": goal_conversion,
+        "payment_conversion": payment_conversion,
+    }

@@ -5,7 +5,12 @@
 Редактирование целей и этапов.
 """
 
-BOT_VERSION = "2.3.1"
+BOT_VERSION = "2.3.3"
+
+# ========================
+# Админ
+# ========================
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 import os
 import logging
@@ -1569,6 +1574,13 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+
+    # Если это админ — показываем дашборд бота
+    if ADMIN_ID and user_id == ADMIN_ID:
+        await _admin_stats(update)
+        return
+
+    # Обычный пользователь — личная статистика
     stats = db.get_user_stats(user_id)
     sub = db.get_subscription_status(user_id)
     tier = db.get_user_tier(user_id)
@@ -1600,6 +1612,49 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     await update.message.reply_text(text.strip(), parse_mode="Markdown")
+
+
+async def _admin_stats(update: Update):
+    """Дашборд администратора с полной аналитикой бота."""
+    s = db.get_admin_stats()
+
+    lines = [
+        "📊 Статистика бота",
+        "",
+        "👥 Пользователи",
+        "├ Всего: {}".format(s["total_users"]),
+        "├ Активных (7д): {}".format(s["active_7d"]),
+        "├ Активных (30д): {}".format(s["active_30d"]),
+        "├ Новых сегодня: {}".format(s["new_today"]),
+        "└ Новых (7д): {}".format(s["new_7d"]),
+        "",
+        "🎯 Цели",
+        "├ Всего: {}".format(s["total_goals"]),
+        "├ Активных: {}".format(s["active_goals"]),
+        "└ Завершённых: {}".format(s["completed_goals"]),
+        "",
+        "💰 Тарифы",
+        "├ FREE: {}".format(s["tier_free"]),
+        "├ LITE ($7): {}".format(s["tier_lite"]),
+        "├ PRO ($15): {}".format(s["tier_pro"]),
+        "├ PREMIUM ($29): {}".format(s["tier_premium"]),
+        "└ Выручка: {} Stars".format(s["total_revenue_stars"]),
+        "",
+        "🤖 Коуч",
+        "├ Прошли анкету: {}".format(s["questionnaire_count"]),
+        "└ Сообщений коучу: {}".format(s["total_coach_messages"]),
+        "",
+        "📈 Конверсия",
+        "├ Создали цель: {}/{} ({:.1f}%)".format(
+            s["users_with_goals"], s["total_users"], s["goal_conversion"]
+        ),
+        "└ Оплатили тариф: {}/{} ({:.1f}%)".format(
+            s["users_with_payment"], s["total_users"], s["payment_conversion"]
+        ),
+    ]
+
+    text = "\n".join(lines)
+    await update.message.reply_text(text, parse_mode=None)
 
 
 # ========================
