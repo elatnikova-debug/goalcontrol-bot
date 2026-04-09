@@ -6,7 +6,7 @@
 import sqlite3
 import os
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional  # noqa: F401
 
 DB_PATH = os.getenv("DB_PATH", "coach_bot.db")
 
@@ -420,7 +420,7 @@ def get_goal(goal_id: int):
 
 def complete_goal(goal_id: int):
     conn = get_connection()
-    now = datetime.now().isoformat()
+    now = datetime.utcnow().isoformat()
     conn.execute(
         "UPDATE goals SET status = 'completed', completed_at = ? WHERE id = ?",
         (now, goal_id)
@@ -478,7 +478,7 @@ def get_milestones(goal_id: int):
 
 def complete_milestone(milestone_id: int):
     conn = get_connection()
-    now = datetime.now().isoformat()
+    now = datetime.utcnow().isoformat()
     conn.execute(
         "UPDATE milestones SET status = 'completed', completed_at = ? WHERE id = ?",
         (now, milestone_id)
@@ -612,6 +612,13 @@ def get_user_profile(user_id: int) -> dict | None:
     return dict(row) if row else None
 
 
+PROFILE_COLUMNS = {
+    "full_name", "birth_date", "birth_city", "birth_time",
+    "face_photo_id", "right_palm_photo_id", "left_palm_photo_id",
+    "analysis_result", "analysis_done_at",
+}
+
+
 def save_user_profile(user_id: int, **kwargs):
     existing = get_user_profile(user_id)
     if not existing:
@@ -619,6 +626,8 @@ def save_user_profile(user_id: int, **kwargs):
         conn.execute("INSERT OR IGNORE INTO user_profile (user_id) VALUES (?)", (user_id,))
         conn.commit()
         conn.close()
+    # Filter to allowed columns only to prevent SQL injection
+    kwargs = {k: v for k, v in kwargs.items() if k in PROFILE_COLUMNS}
     if not kwargs:
         return
     fields = ", ".join(f"{k} = ?" for k in kwargs)
@@ -734,7 +743,7 @@ def get_user_stats(user_id: int):
     """, (user_id,)).fetchall()
 
     streak = 0
-    today = datetime.now().date()
+    today = datetime.utcnow().date()
     for i, row in enumerate(recent_days):
         day = datetime.strptime(row["day"], "%Y-%m-%d").date()
         expected = today - timedelta(days=i)

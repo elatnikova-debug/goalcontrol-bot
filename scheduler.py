@@ -10,6 +10,8 @@ import asyncio
 import logging
 from datetime import datetime, timedelta
 
+from telegram import InlineKeyboardMarkup, InlineKeyboardButton
+
 import database as db
 import motivation as mot
 

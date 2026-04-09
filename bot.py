@@ -5,7 +5,7 @@
 Редактирование целей и этапов.
 """
 
-BOT_VERSION = "2.3"
+BOT_VERSION = "2.3.1"
 
 import os
 import logging
@@ -49,13 +49,8 @@ PRO_SUB_PRICE_STARS = db.PRO_SUB_PRICE_STARS  # 1450 Stars ≈ $29/мес
     GOAL_CONFIRM,
 ) = range(6)
 
-COACH_CHAT = 100
-
 # Состояния анкеты коуча
 (CQ_BUSINESS_AREA, CQ_EXPERIENCE, CQ_CHALLENGE, CQ_TEAM_SIZE, CQ_REVENUE) = range(200, 205)
-
-# Состояния редактирования
-(EDIT_RENAME_MS, EDIT_ADD_MS, EDIT_DEADLINE) = range(300, 303)
 
 creating_goals = {}
 
@@ -820,9 +815,25 @@ async def show_pro_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
     data = query.data
     user_id = query.from_user.id
+
+    # Ветки, которым нужен свой query.answer() с текстом — обрабатываем ДО blanket answer
+    if data.startswith("ed_del_ok_"):
+        ms_id = int(data.split("_")[3])
+        ms = db.get_milestone(ms_id)
+        if ms:
+            goal_id = ms["goal_id"]
+            db.delete_milestone(ms_id)
+            await query.answer("🗑 Этап удалён.")
+            goal = db.get_goal(goal_id)
+            if goal:
+                await show_goal_detail(update, context, goal_id)
+        else:
+            await query.answer("Этап уже удалён.")
+        return
+
+    await query.answer()
 
     # --- Редактирование целей ---
     if data.startswith("edit_") and not data.startswith("edit_conv"):
@@ -861,20 +872,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         return
-
-    elif data.startswith("ed_del_ok_"):
-        ms_id = int(data.split("_")[3])
-        ms = db.get_milestone(ms_id)
-        if ms:
-            goal_id = ms["goal_id"]
-            db.delete_milestone(ms_id)
-            await query.edit_message_text("🗑 Этап удалён.")
-            # Показываем обновлённый список
-            goal = db.get_goal(goal_id)
-            if goal:
-                await show_goal_detail(update, context, goal_id)
-        else:
-            await query.edit_message_text("Этап уже удалён.")
 
     elif data.startswith("ed_del_ms_"):
         # Это не используется, но на всякий случай
@@ -1008,7 +1005,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     # Отменить цель
-    elif data.startswith("cancel_"):
+    elif data.startswith("cancel_") and data.split("_")[1].isdigit():
         goal_id = int(data.split("_")[1])
         goal = db.get_goal(goal_id)
         buttons = [
@@ -1380,6 +1377,9 @@ async def newgoal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
 async def goal_title_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+    if user_id not in creating_goals:
+        await update.message.reply_text("Сессия создания цели истекла. Используй /newgoal чтобы начать заново.")
+        return ConversationHandler.END
     creating_goals[user_id]["title"] = update.message.text
     await update.message.reply_text(
         "Отлично! Теперь коротко опиши — что именно ты хочешь достичь? (или /skip)"
@@ -1389,6 +1389,9 @@ async def goal_title_received(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def goal_description_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+    if user_id not in creating_goals:
+        await update.message.reply_text("Сессия создания цели истекла. Используй /newgoal чтобы начать заново.")
+        return ConversationHandler.END
     if update.message.text != "/skip":
         creating_goals[user_id]["description"] = update.message.text
     else:
@@ -1401,6 +1404,9 @@ async def goal_description_received(update: Update, context: ContextTypes.DEFAUL
 
 async def goal_deadline_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+    if user_id not in creating_goals:
+        await update.message.reply_text("Сессия создания цели истекла. Используй /newgoal чтобы начать заново.")
+        return ConversationHandler.END
     text = update.message.text.strip()
     try:
         dl = datetime.strptime(text, "%d.%m.%Y").date()
@@ -1422,6 +1428,9 @@ async def goal_deadline_received(update: Update, context: ContextTypes.DEFAULT_T
 
 async def goal_milestones_count_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+    if user_id not in creating_goals:
+        await update.message.reply_text("Сессия создания цели истекла. Используй /newgoal чтобы начать заново.")
+        return ConversationHandler.END
     try:
         count = int(update.message.text.strip())
         if not 1 <= count <= 10:
@@ -1442,6 +1451,9 @@ async def goal_milestones_count_received(update: Update, context: ContextTypes.D
 
 async def goal_milestone_title_received(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     user_id = update.effective_user.id
+    if user_id not in creating_goals:
+        await update.message.reply_text("Сессия создания цели истекла. Используй /newgoal чтобы начать заново.")
+        return ConversationHandler.END
     data = creating_goals[user_id]
     title = update.message.text.strip()
     current = data["current_milestone"]
@@ -1932,21 +1944,6 @@ def build_application(token: str) -> Application:
     # Анализ личности
     analyze_conv = build_analyze_conversation(extra_fallbacks=common_fallbacks)
 
-    # Редактирование целей — ConversationHandler
-    edit_conv = ConversationHandler(
-        entry_points=[
-            CallbackQueryHandler(callback_handler, pattern="^edit_[0-9]+$"),
-        ],
-        states={
-            EDIT_RENAME_MS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
-            EDIT_ADD_MS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
-            EDIT_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
-        },
-        fallbacks=common_fallbacks,
-        allow_reentry=True,
-        name="edit_conv",
-        persistent=True,
-    )
 
     # === Порядок важен! ===
     # 1. Команды (они должны работать всегда, даже вне диалогов)

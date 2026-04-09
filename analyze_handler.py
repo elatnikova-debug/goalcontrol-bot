@@ -4,7 +4,6 @@ ConversationHandler для команды /analyze.
 Затем отправляет всё в GPT-4o и возвращает анализ личности.
 """
 
-import io
 import logging
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
