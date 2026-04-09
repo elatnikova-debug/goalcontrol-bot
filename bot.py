@@ -1,10 +1,11 @@
 """
-Коуч-Трекер Telegram Bot — версия 2.2
-Главное меню на кнопках. PRO-монетизация. Коуч с лимитом.
-Умные триггеры. Астро-советы. Предложение закрепить.
+Коуч-Трекер Telegram Bot — версия 2.3
+Главное меню на кнопках. 3 тарифа. Коуч с лимитом + анкета.
+Умные триггеры. Астро-советы. Предложение закрепить. SMART-подсказки.
+Редактирование целей и этапов.
 """
 
-BOT_VERSION = "2.2"
+BOT_VERSION = "2.3"
 
 import os
 import logging
@@ -30,9 +31,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ========================
-# Цены
+# Цены — 3 тарифа
 # ========================
-PRO_PRICE_STARS = db.PRO_PRICE_STARS        # 950 Stars ≈ $19
+LITE_PRICE_STARS = db.LITE_PRICE_STARS        # 350 Stars ≈ $7/мес
+PRO_PRICE_STARS = db.PRO_PRICE_STARS          # 750 Stars ≈ $15/мес
 PRO_SUB_PRICE_STARS = db.PRO_SUB_PRICE_STARS  # 1450 Stars ≈ $29/мес
 
 # ========================
@@ -49,7 +51,16 @@ PRO_SUB_PRICE_STARS = db.PRO_SUB_PRICE_STARS  # 1450 Stars ≈ $29/мес
 
 COACH_CHAT = 100
 
+# Состояния анкеты коуча
+(CQ_BUSINESS_AREA, CQ_EXPERIENCE, CQ_CHALLENGE, CQ_TEAM_SIZE, CQ_REVENUE) = range(200, 205)
+
+# Состояния редактирования
+(EDIT_RENAME_MS, EDIT_ADD_MS, EDIT_DEADLINE) = range(300, 303)
+
 creating_goals = {}
+
+# Хранилище данных анкеты (по user_id)
+cq_data_store = {}
 
 
 # ========================
@@ -85,7 +96,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if sub["status"] == "trial":
                 status_text = f"🆓 Пробный период: {sub['days_left']} дней осталось"
             elif sub["status"] == "active":
-                status_text = f"👑 PRO-подписка активна до {sub['expires_at']}"
+                status_text = f"👑 Подписка активна до {sub['expires_at']}"
             else:
                 status_text = "⏰ Пробный период завершён"
         except Exception as e:
@@ -93,18 +104,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             status_text = ""
 
         try:
-            has_pro = db.has_pro_access(user.id)
-            pro_text = "💎 PRO-доступ: активен" if has_pro else ""
+            tier = db.get_user_tier(user.id)
+            tier_labels = {
+                "free": "",
+                "lite": "⭐ LITE-доступ: активен",
+                "pro": "💎 PRO-доступ: активен",
+                "premium": "👑 PREMIUM-доступ: активен",
+            }
+            tier_text = tier_labels.get(tier, "")
         except Exception as e:
-            logger.error(f"Error checking pro: {e}")
-            pro_text = ""
+            logger.error(f"Error checking tier: {e}")
+            tier_text = ""
 
         text = (
             f"Привет, {name}! 🚀\n\n"
             f"Я твой персональный коуч-трекер для предпринимателей.\n"
             f"Помогаю ставить цели, держать фокус и расти быстрее.\n\n"
             f"{status_text}\n"
-            f"{pro_text}\n\n"
+            f"{tier_text}\n\n"
             f"Выбери действие в меню ниже 👇\n"
             f"\n• v{BOT_VERSION}"
         )
@@ -252,6 +269,7 @@ async def show_goal_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, g
 
     buttons = [
         [InlineKeyboardButton("✅ Отметить этап", callback_data=f"done_{goal_id}")],
+        [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
         [InlineKeyboardButton("🏁 Завершить цель", callback_data=f"complete_{goal_id}")],
         [InlineKeyboardButton("❌ Отменить цель", callback_data=f"cancel_{goal_id}")],
         [InlineKeyboardButton("◀️ Назад", callback_data="back_goals")],
@@ -470,25 +488,43 @@ async def stars_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ========================
-# 🤖 Коуч
+# 🤖 Коуч — анкета (5 вопросов)
 # ========================
 
 async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Точка входа: кнопка 🤖 Коуч — проверяем анкету, лимиты, запускаем."""
     user_id = update.effective_user.id
-    has_pro = db.has_pro_access(user_id) or db.has_pro_subscription(user_id)
+    has_paid = db.has_lite_access(user_id)
     remaining = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
 
-    if not has_pro and remaining <= 0:
+    if not has_paid and remaining <= 0:
         await update.message.reply_text(
             mot.COACH_LIMIT_REACHED,
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("💎 Открыть PRO-доступ", callback_data="pro_buy")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ LITE — 350 Stars/мес", callback_data="lite_buy")],
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+            ])
         )
         return
 
-    if has_pro:
+    # Проверяем анкету — если не пройдена, запускаем ConversationHandler
+    if not db.has_coach_questionnaire(user_id):
+        cq_data_store[user_id] = {}
+        await update.message.reply_text(
+            "🤖 *Перед началом — короткая анкета*\n\n"
+            "Чтобы коуч работал максимально эффективно, "
+            "мне нужно понять контекст твоего бизнеса.\n"
+            "5 вопросов — займёт 1 минуту.\n\n"
+            "📌 *Вопрос 1/5:* В какой сфере твой бизнес?\n\n"
+            "Напиши кратко, например: IT, маркетинг, ресторан, строительство, e-commerce...",
+            parse_mode="Markdown",
+            reply_markup=ReplyKeyboardRemove()
+        )
+        return CQ_BUSINESS_AREA
+
+    # Анкета пройдена — открываем коуч
+    if has_paid:
         coach_text = (
             "🤖 *Коуч на связи*\n\n"
             "Я твой персональный AI-коуч. Задавай любые вопросы:\n"
@@ -496,7 +532,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "• Как расставить приоритеты\n"
             "• Стратегия роста бизнеса\n"
             "• Работа с командой и делегирование\n\n"
-            "👑 У тебя PRO — без ограничений. Что тебя беспокоит прямо сейчас?"
+            "👑 У тебя подписка — без ограничений. Что тебя беспокоит прямо сейчас?"
         )
     else:
         coach_text = mot.COACH_WELCOME.format(remaining=remaining)
@@ -513,6 +549,99 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+# --- Анкета: 5 шагов ---
+
+async def cq_business_area(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    cq_data_store.setdefault(user_id, {})["business_area"] = update.message.text.strip()
+    await update.message.reply_text(
+        "📌 *Вопрос 2/5:* Сколько лет ты в бизнесе?\n\n"
+        "Напиши примерно: меньше года, 1-3 года, 3-5 лет, 5-10 лет, больше 10 лет",
+        parse_mode="Markdown"
+    )
+    return CQ_EXPERIENCE
+
+
+async def cq_experience(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    cq_data_store.setdefault(user_id, {})["experience_years"] = update.message.text.strip()
+    await update.message.reply_text(
+        "📌 *Вопрос 3/5:* Какой главный вызов или проблема в бизнесе прямо сейчас?\n\n"
+        "Напиши одно предложение — то, что больше всего мешает расти.",
+        parse_mode="Markdown"
+    )
+    return CQ_CHALLENGE
+
+
+async def cq_challenge(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    cq_data_store.setdefault(user_id, {})["main_challenge"] = update.message.text.strip()
+    await update.message.reply_text(
+        "📌 *Вопрос 4/5:* Размер команды?\n\n"
+        "Один, 2-5 человек, 6-20, 21-50, больше 50",
+        parse_mode="Markdown"
+    )
+    return CQ_TEAM_SIZE
+
+
+async def cq_team_size(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    cq_data_store.setdefault(user_id, {})["team_size"] = update.message.text.strip()
+    await update.message.reply_text(
+        "📌 *Вопрос 5/5:* Примерный годовой оборот?\n\n"
+        "Только начинаю, до $100K, $100K-$500K, $500K-$1M, больше $1M\n\n"
+        "_(Информация конфиденциальна и используется только для коуч-сессий)_",
+        parse_mode="Markdown"
+    )
+    return CQ_REVENUE
+
+
+async def cq_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    user_id = update.effective_user.id
+    cq_data_store.setdefault(user_id, {})["annual_revenue"] = update.message.text.strip()
+    data = cq_data_store.pop(user_id, {})
+
+    # Сохраняем анкету
+    db.save_coach_questionnaire(
+        user_id,
+        business_area=data.get("business_area", ""),
+        experience_years=data.get("experience_years", ""),
+        main_challenge=data.get("main_challenge", ""),
+        team_size=data.get("team_size", ""),
+        annual_revenue=data.get("annual_revenue", ""),
+    )
+
+    has_paid = db.has_lite_access(user_id)
+    remaining = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
+
+    if has_paid:
+        coach_text = (
+            "✅ Анкета сохранена! Теперь коуч знает твой контекст.\n\n"
+            "🤖 *Коуч на связи*\n\n"
+            "👑 У тебя подписка — без ограничений. Что тебя беспокоит прямо сейчас?"
+        )
+    else:
+        coach_text = (
+            "✅ Анкета сохранена! Теперь коуч знает твой контекст.\n\n"
+            + mot.COACH_WELCOME.format(remaining=remaining)
+        )
+
+    context.user_data["coach_mode"] = True
+    await update.message.reply_text(
+        coach_text,
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("🏠 Главное меню")]],
+            resize_keyboard=True
+        )
+    )
+    return ConversationHandler.END
+
+
+# ========================
+# Коуч — обработка сообщений
+# ========================
+
 async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обрабатывает сообщения в режиме коуч-чата."""
     if update.message.text == "🏠 Главное меню":
@@ -524,9 +653,9 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     user_id = update.effective_user.id
-    has_pro = db.has_pro_access(user_id) or db.has_pro_subscription(user_id)
+    has_paid = db.has_lite_access(user_id)
 
-    if not has_pro:
+    if not has_paid:
         remaining = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
         if remaining <= 0:
             context.user_data.pop("coach_mode", None)
@@ -552,7 +681,7 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Сохраняем сообщение пользователя
     db.save_coach_message(user_id, "user", user_message)
-    if not has_pro:
+    if not has_paid:
         db.increment_coach_messages(user_id)
 
     # Получаем историю
@@ -566,6 +695,19 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
         for g in goals[:5]:
             goals_context += f"- {g['title']} (дедлайн: {g['deadline']})\n"
 
+    # Получаем анкету для контекста
+    questionnaire = db.get_coach_questionnaire(user_id)
+    quest_context = ""
+    if questionnaire:
+        quest_context = (
+            f"\n\nКонтекст предпринимателя (из анкеты):"
+            f"\n- Сфера бизнеса: {questionnaire.get('business_area', 'не указана')}"
+            f"\n- Опыт: {questionnaire.get('experience_years', 'не указан')}"
+            f"\n- Главный вызов: {questionnaire.get('main_challenge', 'не указан')}"
+            f"\n- Команда: {questionnaire.get('team_size', 'не указана')}"
+            f"\n- Оборот: {questionnaire.get('annual_revenue', 'не указан')}"
+        )
+
     system_prompt = (
         "Ты — элитный коуч для предпринимателей. Мировой уровень. "
         "Объединяешь лучшие методологии: OKR, SMART, GTD, принципы Коллинза и Друкера, "
@@ -574,6 +716,7 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
         "Даёшь конкретные действия, а не общие советы. "
         "Отвечаешь только на русском языке. Максимум 300 слов за ответ."
         + goals_context
+        + quest_context
     )
 
     try:
@@ -596,10 +739,10 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
         remaining_after = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
 
         footer = ""
-        if not has_pro and remaining_after <= 5:
+        if not has_paid and remaining_after <= 5:
             footer = f"\n\n_Осталось сообщений сегодня: {remaining_after}_"
             if remaining_after <= 2:
-                footer += "\n\n💎 Хочешь без ограничений? /pro"
+                footer += "\n\n⭐ Хочешь без ограничений? Подключи подписку: /pro"
 
         await update.message.reply_text(
             reply + footer,
@@ -614,54 +757,61 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
 
 
 # ========================
-# 💎 PRO-доступ
+# 💎 PRO-доступ — 3 тарифа
 # ========================
 
 async def show_pro_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    has_pro = db.has_pro_access(user_id)
-    has_sub = db.has_pro_subscription(user_id)
+    tier = db.get_user_tier(user_id)
 
-    if has_pro and has_sub:
+    if tier == "premium":
         await update.message.reply_text(
-            "👑 У тебя активен полный PRO-доступ и подписка!\n\nВсе возможности разблокированы.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🧠 Мой предпринимательский профиль", callback_data="pro_profile"),
-                InlineKeyboardButton("🧪 Профайлинг", callback_data="pro_tests"),
-            ], [
-                InlineKeyboardButton("🚀 Стратегия роста", callback_data="pro_roadmap"),
-            ]])
+            "👑 *У тебя PREMIUM-доступ — всё включено!*\n\n"
+            "Безлимитный коуч, профиль, профайлинг, стратегия роста, "
+            "еженедельные разборы и приоритетная поддержка.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🧠 Мой профиль", callback_data="pro_profile"),
+                 InlineKeyboardButton("🧪 Профайлинг", callback_data="pro_tests")],
+                [InlineKeyboardButton("🚀 Стратегия роста", callback_data="pro_roadmap")],
+            ])
         )
-        return
-
-    if has_pro:
-        text = (
-            "💎 *У тебя активен PRO-доступ!*\n\n"
-            "Доступны:\n"
-            "🧠 Предпринимательский профиль\n"
-            "🧪 Профайлинг\n"
-            "🚀 Стратегия роста\n\n"
-            "Хочешь добавить безлимитный коуч и еженедельные разборы?"
+    elif tier == "pro":
+        await update.message.reply_text(
+            "💎 *У тебя PRO-доступ!*\n\n"
+            "Доступны: безлимитный коуч, профиль, профайлинг, стратегия роста.\n\n"
+            "Хочешь еженедельные AI-разборы и приоритет?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🧠 Профиль", callback_data="pro_profile"),
+                 InlineKeyboardButton("🧪 Профайлинг", callback_data="pro_tests")],
+                [InlineKeyboardButton("🚀 Стратегия роста", callback_data="pro_roadmap")],
+                [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
+            ])
         )
-        buttons = [
-            [InlineKeyboardButton("🧠 Профиль", callback_data="pro_profile"),
-             InlineKeyboardButton("🧪 Профайлинг", callback_data="pro_tests")],
-            [InlineKeyboardButton("🚀 Стратегия роста", callback_data="pro_roadmap")],
-            [InlineKeyboardButton("👑 PRO-подписка $29/мес", callback_data="pro_sub_buy")],
-        ]
+    elif tier == "lite":
+        await update.message.reply_text(
+            "⭐ *У тебя LITE-доступ!*\n\n"
+            "Безлимитный коуч и персональные звёзды.\n\n"
+            "Хочешь профиль, профайлинг и стратегию роста?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
+            ])
+        )
     else:
-        text = mot.PRO_OFFER
-        buttons = [
-            [InlineKeyboardButton("💎 Купить PRO-доступ — 950 Stars", callback_data="pro_buy")],
-            [InlineKeyboardButton("👑 PRO-подписка — 1450 Stars/мес", callback_data="pro_sub_buy")],
-            [InlineKeyboardButton("❓ Что входит в PRO?", callback_data="pro_info")],
-        ]
-
-    await update.message.reply_text(
-        text,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(buttons)
-    )
+        # free
+        await update.message.reply_text(
+            mot.TARIFF_OVERVIEW,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("⭐ LITE — 350 Stars/мес", callback_data="lite_buy")],
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
+                [InlineKeyboardButton("❓ Подробнее о тарифах", callback_data="tariff_info")],
+            ])
+        )
 
 
 # ========================
@@ -674,8 +824,96 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
     user_id = query.from_user.id
 
-    # Навигация по целям
-    if data == "new_goal":
+    # --- Редактирование целей ---
+    if data.startswith("edit_") and not data.startswith("edit_conv"):
+        goal_id = int(data.split("_")[1])
+        goal = db.get_goal(goal_id)
+        if not goal:
+            await query.edit_message_text("Цель не найдена.")
+            return
+        milestones = db.get_milestones(goal_id)
+        buttons = []
+        for m in milestones:
+            buttons.append([
+                InlineKeyboardButton(f"✏️ {m['title'][:25]}", callback_data=f"ed_rename_{m['id']}"),
+                InlineKeyboardButton("🗑", callback_data=f"ed_del_{m['id']}"),
+            ])
+        buttons.append([InlineKeyboardButton("➕ Добавить этап", callback_data=f"ed_add_{goal_id}")])
+        buttons.append([InlineKeyboardButton("📅 Изменить дедлайн", callback_data=f"ed_deadline_{goal_id}")])
+        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data=f"goal_{goal_id}")])
+        await query.edit_message_text(
+            f"✏️ *Редактирование: {goal['title']}*\n\n"
+            "Выбери действие:",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+
+    elif data.startswith("ed_rename_"):
+        ms_id = int(data.split("_")[2])
+        ms = db.get_milestone(ms_id)
+        if not ms:
+            await query.edit_message_text("Этап не найден.")
+            return
+        context.user_data["edit_rename_ms_id"] = ms_id
+        context.user_data["edit_rename_goal_id"] = ms["goal_id"]
+        await query.edit_message_text(
+            f"Текущее название: *{ms['title']}*\n\nНапиши новое название этапа:",
+            parse_mode="Markdown"
+        )
+        return
+
+    elif data.startswith("ed_del_ok_"):
+        ms_id = int(data.split("_")[3])
+        ms = db.get_milestone(ms_id)
+        if ms:
+            goal_id = ms["goal_id"]
+            db.delete_milestone(ms_id)
+            await query.edit_message_text("🗑 Этап удалён.")
+            # Показываем обновлённый список
+            goal = db.get_goal(goal_id)
+            if goal:
+                await show_goal_detail(update, context, goal_id)
+        else:
+            await query.edit_message_text("Этап уже удалён.")
+
+    elif data.startswith("ed_del_ms_"):
+        # Это не используется, но на всякий случай
+        pass
+
+    elif data.startswith("ed_del_"):
+        ms_id = int(data.split("_")[2])
+        ms = db.get_milestone(ms_id)
+        if not ms:
+            await query.edit_message_text("Этап не найден.")
+            return
+        await query.edit_message_text(
+            f"Удалить этап *{ms['title']}*?",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Да, удалить", callback_data=f"ed_del_ok_{ms_id}")],
+                [InlineKeyboardButton("◀️ Отмена", callback_data=f"edit_{ms['goal_id']}")],
+            ])
+        )
+
+    elif data.startswith("ed_add_"):
+        goal_id = int(data.split("_")[2])
+        context.user_data["edit_add_goal_id"] = goal_id
+        await query.edit_message_text(
+            "Напиши название нового этапа:"
+        )
+
+    elif data.startswith("ed_deadline_"):
+        goal_id = int(data.split("_")[2])
+        goal = db.get_goal(goal_id)
+        context.user_data["edit_deadline_goal_id"] = goal_id
+        await query.edit_message_text(
+            f"Текущий дедлайн: *{goal['deadline'] if goal else '—'}*\n\n"
+            "Напиши новый дедлайн в формате ДД.ММ.ГГГГ:",
+            parse_mode="Markdown"
+        )
+
+    # --- Навигация по целям ---
+    elif data == "new_goal":
         await query.edit_message_text("Используй команду /newgoal чтобы создать новую цель.")
 
     elif data.startswith("goal_"):
@@ -788,20 +1026,24 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.cancel_goal(goal_id)
         await query.edit_message_text("Цель отменена.")
 
-    # PRO-покупка
+    # --- 3 тарифа: покупка ---
+    elif data == "lite_buy":
+        await send_pro_invoice(update, context, "lite_sub")
+
     elif data == "pro_buy":
-        await send_pro_invoice(update, context, "pro_bundle")
+        await send_pro_invoice(update, context, "pro_sub")
 
-    elif data == "pro_sub_buy":
-        await send_pro_invoice(update, context, "pro_subscription")
+    elif data in ("premium_buy", "pro_sub_buy"):
+        await send_pro_invoice(update, context, "premium_sub")
 
-    elif data == "pro_info":
+    elif data in ("tariff_info", "pro_info"):
         await query.edit_message_text(
-            mot.PRO_OFFER + "\n\n" + mot.PRO_SUB_OFFER,
+            mot.TARIFF_OVERVIEW + "\n\n" + mot.LITE_OFFER + "\n\n" + mot.PRO_OFFER + "\n\n" + mot.PRO_SUB_OFFER,
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 Купить PRO — 950 Stars", callback_data="pro_buy")],
-                [InlineKeyboardButton("👑 Подписка — 1450 Stars/мес", callback_data="pro_sub_buy")],
+                [InlineKeyboardButton("⭐ LITE — 350 Stars/мес", callback_data="lite_buy")],
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
             ])
         )
 
@@ -858,11 +1100,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "start_coach_from_trigger":
         # Активируем коуч-режим
         context.user_data["coach_mode"] = True
-        has_pro = db.has_pro_access(user_id) or db.has_pro_subscription(user_id)
-        if has_pro:
+        has_paid = db.has_lite_access(user_id)
+        if has_paid:
             coach_text = (
                 "🤖 *Коуч на связи*\n\n"
-                "👑 У тебя PRO — без ограничений. Что тебя беспокоит прямо сейчас?"
+                "👑 У тебя подписка — без ограничений. Что тебя беспокоит прямо сейчас?"
             )
         else:
             remaining = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
@@ -888,9 +1130,9 @@ async def handle_pro_profile(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not db.has_pro_access(user_id):
         await query.edit_message_text(
             "💎 Эта функция доступна в PRO-доступе.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Купить PRO — 950 Stars", callback_data="pro_buy")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")]
+            ])
         )
         return
 
@@ -911,9 +1153,9 @@ async def handle_pro_profile(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Для создания профиля нужно пройти анализ личности.\n"
             "Используй команду /analyze — это займёт около 3 минут.",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔮 Начать анализ", callback_data="start_analyze")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🔮 Начать анализ", callback_data="start_analyze")]
+            ])
         )
 
 
@@ -924,9 +1166,9 @@ async def handle_pro_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db.has_pro_access(user_id):
         await query.edit_message_text(
             "💎 Эта функция доступна в PRO-доступе.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Купить PRO — 950 Stars", callback_data="pro_buy")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")]
+            ])
         )
         return
 
@@ -950,9 +1192,9 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not db.has_pro_access(user_id):
         await query.edit_message_text(
             "💎 Эта функция доступна в PRO-доступе.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("Купить PRO — 950 Stars", callback_data="pro_buy")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")]
+            ])
         )
         return
 
@@ -962,9 +1204,9 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if not goals:
         await query.edit_message_text(
             "🚀 Для стратегии роста сначала создай хотя бы одну цель.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")]
+            ])
         )
         return
 
@@ -979,7 +1221,7 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         from openai import AsyncOpenAI
         client = AsyncOpenAI(api_key=api_key)
 
-        goals_text = "\n".join(f"- {g['title']} (дедлайн: {g['deadline']})" for g in goals)
+        goals_text = chr(10).join(f"- {g['title']} (дедлайн: {g['deadline']})" for g in goals)
         analysis = profile.get("analysis_result", "") if profile else ""
 
         prompt = (
@@ -1017,32 +1259,44 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 
 # ========================
-# Оплата
+# Оплата — 3 тарифа
 # ========================
 
 async def send_pro_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE, product: str):
     query = update.callback_query
     user_id = query.from_user.id
 
-    if product == "pro_bundle":
-        title = "💎 PRO-доступ"
-        description = "Предпринимательский профиль + Профайлинг + Стратегия роста. Разовая покупка — навсегда."
-        payload = "pro_bundle"
-        price = PRO_PRICE_STARS
-    else:
-        title = "👑 PRO-подписка"
-        description = "Безлимитный коуч 24/7 + еженедельные разборы + всё из PRO-доступа. 30 дней."
-        payload = "pro_subscription"
-        price = PRO_SUB_PRICE_STARS
+    products = {
+        "lite_sub": {
+            "title": "⭐ LITE-подписка",
+            "description": "Безлимитный коуч 24/7 + персональные астро-советы. 30 дней.",
+            "price": LITE_PRICE_STARS,
+        },
+        "pro_sub": {
+            "title": "💎 PRO-подписка",
+            "description": "Всё из LITE + профиль + профайлинг + стратегия роста. 30 дней.",
+            "price": PRO_PRICE_STARS,
+        },
+        "premium_sub": {
+            "title": "👑 PREMIUM-подписка",
+            "description": "Всё из PRO + еженедельные AI-разборы + приоритетная поддержка. 30 дней.",
+            "price": PRO_SUB_PRICE_STARS,
+        },
+    }
+
+    info = products.get(product)
+    if not info:
+        await query.message.reply_text("Неизвестный тариф.")
+        return
 
     try:
         await context.bot.send_invoice(
             chat_id=user_id,
-            title=title,
-            description=description,
-            payload=payload,
+            title=info["title"],
+            description=info["description"],
+            payload=product,
             currency="XTR",
-            prices=[LabeledPrice(label=title, amount=price)],
+            prices=[LabeledPrice(label=info["title"], amount=info["price"])],
         )
     except Exception as e:
         logger.error(f"Invoice error: {e}")
@@ -1061,34 +1315,30 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     charge_id = payment.telegram_payment_charge_id
     amount = payment.total_amount
 
-    if payload == "pro_bundle":
-        db.save_pro_purchase(user_id, "pro_bundle", charge_id, amount)
-        db.save_payment(user_id, charge_id, "", amount, "XTR", payload)
-        await update.message.reply_text(
-            "🎉 *PRO-доступ активирован!*\n\n"
-            "Теперь тебе доступны:\n"
-            "🧠 Предпринимательский профиль\n"
-            "🧪 Профайлинг\n"
-            "🚀 Стратегия роста\n\n"
-            "Нажми 💎 PRO-доступ в меню чтобы начать!",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
-        )
-    elif payload == "pro_subscription":
-        db.activate_subscription(user_id, days=30)
-        db.save_pro_purchase(user_id, "pro_bundle", charge_id, amount)  # подписка включает всё
-        db.save_payment(user_id, charge_id, "", amount, "XTR", payload)
-        await update.message.reply_text(
-            "👑 *PRO-подписка активирована на 30 дней!*\n\n"
-            "Безлимитный коуч и все PRO-функции теперь твои!\n\n"
-            "Нажми 🤖 Коуч — никаких ограничений.",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
-        )
+    tier_labels = {
+        "lite_sub": ("⭐", "LITE"),
+        "pro_sub": ("💎", "PRO"),
+        "premium_sub": ("👑", "PREMIUM"),
+    }
+
+    icon, label = tier_labels.get(payload, ("💎", "PRO"))
+
+    # Активируем подписку
+    db.activate_subscription(user_id, days=30)
+    db.save_pro_purchase(user_id, payload, charge_id, amount)
+    db.save_payment(user_id, charge_id, "", amount, "XTR", payload)
+
+    await update.message.reply_text(
+        f"🎉 *{icon} {label}-подписка активирована на 30 дней!*\n\n"
+        f"Все функции тарифа {label} теперь твои.\n\n"
+        f"Нажми 🤖 Коуч — никаких ограничений.",
+        parse_mode="Markdown",
+        reply_markup=get_main_keyboard()
+    )
 
 
 # ========================
-# /newgoal
+# /newgoal — SMART-подсказка
 # ========================
 
 async def newgoal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -1096,18 +1346,32 @@ async def newgoal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     db.ensure_user(user_id)
     creating_goals[user_id] = {}
 
-    text = "🎯 *Новая цель или проект*\n\nКак называется твоя цель? Напиши кратко и ёмко."
+    smart_text = (
+        "🎯 *Новая цель или проект*\n\n"
+        "💡 *Совет: используй метод SMART*\n\n"
+        "Правильно поставленная цель — уже половина успеха. "
+        "Исследования показывают: предприниматели, которые формулируют цели по SMART, "
+        "достигают их в 2-3 раза чаще.\n\n"
+        "✅ *S* — Конкретная (что именно?)\n"
+        "✅ *M* — Измеримая (как понять, что достигнута?)\n"
+        "✅ *A* — Достижимая (реально ли за этот срок?)\n"
+        "✅ *R* — Релевантная (зачем это бизнесу?)\n"
+        "✅ *T* — Ограниченная по времени (когда дедлайн?)\n\n"
+        "❌ Плохо: «Увеличить продажи»\n"
+        "✅ Хорошо: «Увеличить выручку на 30% за 3 месяца через запуск нового канала»\n\n"
+        "Как называется твоя цель? Напиши кратко и ёмко 👇"
+    )
 
     if update.callback_query:
         await update.callback_query.answer()
         await update.callback_query.message.reply_text(
-            text,
+            smart_text,
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove()
         )
     else:
         await update.message.reply_text(
-            text,
+            smart_text,
             parse_mode="Markdown",
             reply_markup=ReplyKeyboardRemove()
         )
@@ -1267,6 +1531,16 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
         reply_markup=trigger_buttons
     )
 
+    # === Предложение закрепить бот ===
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=(
+            "📌 *Совет:* Закрепи этот чат, чтобы видеть напоминания и не терять фокус.\n\n"
+            "Зажми чат → Закрепить 📌"
+        ),
+        parse_mode="Markdown"
+    )
+
     # Возвращаем главное меню
     await context.bot.send_message(
         chat_id=user_id,
@@ -1277,21 +1551,29 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 # ========================
-# /stats
+# /stats — с тарифами
 # ========================
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     stats = db.get_user_stats(user_id)
     sub = db.get_subscription_status(user_id)
-    has_pro = db.has_pro_access(user_id)
+    tier = db.get_user_tier(user_id)
 
     if sub["status"] == "trial":
         sub_text = f"🆓 Пробный период: {sub['days_left']} дн."
     elif sub["status"] == "active":
-        sub_text = f"👑 PRO-подписка до {sub['expires_at']}"
+        sub_text = f"👑 Подписка до {sub['expires_at']}"
     else:
         sub_text = "⏰ Пробный период завершён"
+
+    tier_labels = {
+        "free": "Бесплатный",
+        "lite": "⭐ LITE",
+        "pro": "💎 PRO",
+        "premium": "👑 PREMIUM",
+    }
+    tier_text = tier_labels.get(tier, "Бесплатный")
 
     text = (
         f"📊 *Твоя статистика*\n\n"
@@ -1301,7 +1583,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📌 Этапов выполнено: {stats['completed_milestones']} из {stats['total_milestones']}\n"
         f"🔥 Стрик: {stats['streak']} дней\n\n"
         f"💳 Статус: {sub_text}\n"
-        f"{'💎 PRO-доступ: активен' if has_pro else ''}"
+        f"🏷 Тариф: {tier_text}"
     )
 
     await update.message.reply_text(text.strip(), parse_mode="Markdown")
@@ -1328,11 +1610,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/stats — твоя статистика\n"
         "/settings — настройки напоминаний\n"
         "/start — главное меню\n\n"
-        "*PRO-функции:*\n"
-        "🧠 Предпринимательский профиль\n"
-        "🧪 Профайлинг (MBTI + Gallup)\n"
-        "🚀 Индивидуальная стратегия роста\n"
-        "🌟 Персональные астро-советы"
+        "*Тарифы:*\n"
+        "⭐ LITE ($7/мес) — безлимит коуч + звёзды\n"
+        "💎 PRO ($15/мес) — + профиль + профайлинг + стратегия\n"
+        "👑 PREMIUM ($29/мес) — + еженедельные разборы + приоритет"
     )
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
@@ -1446,12 +1727,90 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========================
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Маршрутизация: коуч-режим или помощь."""
+    """Маршрутизация: коуч-режим, редактирование или помощь."""
+    # Проверяем ожидание ввода для редактирования
+    user_id = update.effective_user.id
+    text = update.message.text
+
+    # Переименование этапа
+    if "edit_rename_ms_id" in context.user_data:
+        ms_id = context.user_data.pop("edit_rename_ms_id")
+        goal_id = context.user_data.pop("edit_rename_goal_id", None)
+        db.rename_milestone(ms_id, text.strip())
+        await update.message.reply_text("✅ Этап переименован!")
+        if goal_id:
+            # Отправляем обновлённый вид цели
+            goal = db.get_goal(goal_id)
+            if goal:
+                milestones = db.get_milestones(goal_id)
+                done = sum(1 for m in milestones if m["status"] == "completed")
+                total = len(milestones)
+                bar = mot.format_progress_bar(done, total)
+                ms_text = ""
+                for m in milestones:
+                    icon = "✅" if m["status"] == "completed" else "⬜"
+                    ms_text += f"{icon} {m['title']}\n"
+                await update.message.reply_text(
+                    f"🎯 *{goal['title']}*\n\nПрогресс: {bar}\n\n*Этапы:*\n{ms_text}",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
+                        [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                    ])
+                )
+        return
+
+    # Добавление этапа
+    if "edit_add_goal_id" in context.user_data:
+        goal_id = context.user_data.pop("edit_add_goal_id")
+        db.add_milestone_to_goal(goal_id, text.strip())
+        await update.message.reply_text("✅ Этап добавлен!")
+        goal = db.get_goal(goal_id)
+        if goal:
+            milestones = db.get_milestones(goal_id)
+            done = sum(1 for m in milestones if m["status"] == "completed")
+            total = len(milestones)
+            bar = mot.format_progress_bar(done, total)
+            ms_text = ""
+            for m in milestones:
+                icon = "✅" if m["status"] == "completed" else "⬜"
+                ms_text += f"{icon} {m['title']}\n"
+            await update.message.reply_text(
+                f"🎯 *{goal['title']}*\n\nПрогресс: {bar}\n\n*Этапы:*\n{ms_text}",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
+                    [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                ])
+            )
+        return
+
+    # Изменение дедлайна
+    if "edit_deadline_goal_id" in context.user_data:
+        goal_id = context.user_data.pop("edit_deadline_goal_id")
+        try:
+            dl = datetime.strptime(text.strip(), "%d.%m.%Y").date()
+            if dl <= datetime.now().date():
+                await update.message.reply_text("Дедлайн должен быть в будущем. Попробуй ещё раз (ДД.ММ.ГГГГ):")
+                context.user_data["edit_deadline_goal_id"] = goal_id
+                return
+            db.update_goal_deadline(goal_id, dl.strftime("%Y-%m-%d"))
+            await update.message.reply_text(
+                f"✅ Дедлайн изменён на {dl.strftime('%d.%m.%Y')}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                ])
+            )
+        except ValueError:
+            await update.message.reply_text("Неверный формат. Используй ДД.ММ.ГГГГ:")
+            context.user_data["edit_deadline_goal_id"] = goal_id
+        return
+
+    # Коуч-режим
     if context.user_data.get("coach_mode"):
         await handle_coach_message(update, context)
         return
 
-    text = update.message.text
     if text and text.startswith("/"):
         return
 
@@ -1519,10 +1878,7 @@ def build_application(token: str) -> Application:
     # Обработчик ошибок
     app.add_error_handler(error_handler)
 
-    # Общие fallback’ы для ConversationHandler’ов:
-    # /start выходит из диалога и показывает главное меню
-    # /cancel отменяет диалог
-    # Кнопки меню выходят из диалога и обрабатываются
+    # Общие fallback'ы для ConversationHandler'ов:
     common_fallbacks = [
         CommandHandler("start", start_and_end_conversation),
         CommandHandler("cancel", cancel_conversation),
@@ -1555,8 +1911,42 @@ def build_application(token: str) -> Application:
         persistent=True,
     )
 
+    # Анкета коуча (BEFORE menu handler!)
+    coach_quest_conv = ConversationHandler(
+        entry_points=[
+            MessageHandler(filters.TEXT & filters.Regex("^🤖 Коуч$"), start_coach),
+        ],
+        states={
+            CQ_BUSINESS_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_business_area)],
+            CQ_EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_experience)],
+            CQ_CHALLENGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_challenge)],
+            CQ_TEAM_SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_team_size)],
+            CQ_REVENUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_revenue)],
+        },
+        fallbacks=common_fallbacks,
+        allow_reentry=True,
+        name="coach_quest_conv",
+        persistent=True,
+    )
+
     # Анализ личности
     analyze_conv = build_analyze_conversation(extra_fallbacks=common_fallbacks)
+
+    # Редактирование целей — ConversationHandler
+    edit_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(callback_handler, pattern="^edit_[0-9]+$"),
+        ],
+        states={
+            EDIT_RENAME_MS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
+            EDIT_ADD_MS: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
+            EDIT_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text)],
+        },
+        fallbacks=common_fallbacks,
+        allow_reentry=True,
+        name="edit_conv",
+        persistent=True,
+    )
 
     # === Порядок важен! ===
     # 1. Команды (они должны работать всегда, даже вне диалогов)
@@ -1565,7 +1955,8 @@ def build_application(token: str) -> Application:
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("settings", settings_command))
 
-    # 2. ConversationHandler’ы (перехватывают текст когда активны)
+    # 2. ConversationHandler'ы (перехватывают текст когда активны)
+    app.add_handler(coach_quest_conv)   # Анкета коуча — ДО menu handler
     app.add_handler(goal_conv)
     app.add_handler(analyze_conv)
 
@@ -1585,10 +1976,10 @@ def build_application(token: str) -> Application:
     app.add_handler(PreCheckoutQueryHandler(pre_checkout_handler))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment_handler))
 
-    # 6. Все остальные callback
+    # 6. Все остальные callback (включая edit_, ed_rename_, ed_del_ и т.д.)
     app.add_handler(CallbackQueryHandler(callback_handler))
 
-    # 7. Свободный текст (коуч и прочее)
+    # 7. Свободный текст (коуч, редактирование и прочее)
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
     return app

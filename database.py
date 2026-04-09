@@ -142,6 +142,17 @@ def init_db():
             created_at TEXT DEFAULT (datetime('now')),
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
+
+        CREATE TABLE IF NOT EXISTS coach_questionnaire (
+            user_id INTEGER PRIMARY KEY,
+            business_area TEXT,
+            experience_years TEXT,
+            main_challenge TEXT,
+            team_size TEXT,
+            annual_revenue TEXT,
+            completed_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        );
     """)
     conn.commit()
     conn.close()
@@ -249,28 +260,54 @@ def save_payment(user_id: int, telegram_charge_id: str, provider_charge_id: str,
 
 # --- PRO-доступ ---
 
-# PRO: 950 Stars ≈ $19 (1 Star ≈ $0.02)
-PRO_PRICE_STARS = int(os.getenv("PRO_PRICE_STARS", "950"))
-# Подписка PRO: 1450 Stars ≈ $29/мес
+# === 3 тарифа (1 Star ≈ $0.02) ===
+# LITE:    $7/мес  = 350 Stars  — безлимит коуч + персональные звёзды
+# PRO:     $15/мес = 750 Stars  — + профиль + профайлинг + стратегия роста
+# PREMIUM: $29/мес = 1450 Stars — + еженедельные разборы + приоритетная поддержка
+LITE_PRICE_STARS = int(os.getenv("LITE_PRICE_STARS", "350"))
+PRO_PRICE_STARS = int(os.getenv("PRO_PRICE_STARS", "750"))
 PRO_SUB_PRICE_STARS = int(os.getenv("PRO_SUB_PRICE_STARS", "1450"))
 
 
-def has_pro_access(user_id: int) -> bool:
-    """Проверить, куплен ли PRO-доступ (разовая покупка)."""
+def get_user_tier(user_id: int) -> str:
+    """Текущий тариф пользователя: 'free', 'lite', 'pro', 'premium'."""
     conn = get_connection()
     row = conn.execute(
-        "SELECT id FROM pro_purchases WHERE user_id = ? AND product = 'pro_bundle'",
+        "SELECT product FROM pro_purchases WHERE user_id = ? ORDER BY created_at DESC LIMIT 1",
         (user_id,)
     ).fetchone()
     conn.close()
-    return row is not None
+    if not row:
+        return "free"
+    p = row["product"]
+    if p == "premium_sub" and is_subscription_valid(user_id):
+        return "premium"
+    if p in ("pro_sub", "pro_bundle") and is_subscription_valid(user_id):
+        return "pro"
+    if p == "lite_sub" and is_subscription_valid(user_id):
+        return "lite"
+    # Подписка истекла
+    return "free"
+
+
+def has_pro_access(user_id: int) -> bool:
+    """Есть ли PRO или выше (профиль, профайлинг, стратегия)."""
+    return get_user_tier(user_id) in ("pro", "premium")
+
+
+def has_lite_access(user_id: int) -> bool:
+    """Есть ли LITE или выше (безлимит коуч, звёзды)."""
+    return get_user_tier(user_id) in ("lite", "pro", "premium")
+
+
+def has_premium_access(user_id: int) -> bool:
+    """Есть ли PREMIUM (разборы + приоритет)."""
+    return get_user_tier(user_id) == "premium"
 
 
 def has_pro_subscription(user_id: int) -> bool:
-    """Проверить, есть ли активная PRO-подписка."""
-    # PRO-подписка использует ту же таблицу payments, но с payload='pro_subscription'
-    # и активируется через activate_subscription
-    return is_subscription_valid(user_id) and get_subscription_status(user_id)["status"] == "active"
+    """Любая активная подписка (LITE/PRO/PREMIUM)."""
+    return get_user_tier(user_id) != "free"
 
 
 def save_pro_purchase(user_id: int, product: str, telegram_charge_id: str, amount: int):
@@ -456,6 +493,69 @@ def complete_milestone(milestone_id: int):
             )
     conn.commit()
     conn.close()
+
+
+def rename_milestone(milestone_id: int, new_title: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE milestones SET title = ? WHERE id = ?",
+        (new_title, milestone_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def delete_milestone(milestone_id: int):
+    conn = get_connection()
+    ms = conn.execute("SELECT * FROM milestones WHERE id = ?", (milestone_id,)).fetchone()
+    if ms:
+        conn.execute("DELETE FROM milestones WHERE id = ?", (milestone_id,))
+        # Пересчитываем order_num для оставшихся этапов
+        remaining = conn.execute(
+            "SELECT id FROM milestones WHERE goal_id = ? ORDER BY order_num",
+            (ms["goal_id"],)
+        ).fetchall()
+        for i, m in enumerate(remaining):
+            conn.execute("UPDATE milestones SET order_num = ? WHERE id = ?", (i + 1, m["id"]))
+    conn.commit()
+    conn.close()
+
+
+def add_milestone_to_goal(goal_id: int, title: str) -> int:
+    conn = get_connection()
+    # Определяем следующий order_num
+    max_order = conn.execute(
+        "SELECT MAX(order_num) as mx FROM milestones WHERE goal_id = ?",
+        (goal_id,)
+    ).fetchone()["mx"] or 0
+    # Берём дедлайн цели как дедлайн нового этапа
+    goal = conn.execute("SELECT deadline FROM goals WHERE id = ?", (goal_id,)).fetchone()
+    deadline = goal["deadline"] if goal else ""
+    cursor = conn.execute(
+        "INSERT INTO milestones (goal_id, title, deadline, order_num) VALUES (?, ?, ?, ?)",
+        (goal_id, title, deadline, max_order + 1)
+    )
+    milestone_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return milestone_id
+
+
+def update_goal_deadline(goal_id: int, new_deadline: str):
+    conn = get_connection()
+    conn.execute(
+        "UPDATE goals SET deadline = ? WHERE id = ?",
+        (new_deadline, goal_id)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_milestone(milestone_id: int):
+    conn = get_connection()
+    ms = conn.execute("SELECT * FROM milestones WHERE id = ?", (milestone_id,)).fetchone()
+    conn.close()
+    return ms
 
 
 def get_pending_milestones_for_user(user_id: int):
@@ -652,3 +752,38 @@ def get_user_stats(user_id: int):
         "completed_milestones": completed_milestones,
         "streak": streak,
     }
+
+
+# --- Анкета коуча ---
+
+def has_coach_questionnaire(user_id: int) -> bool:
+    """Прошёл ли пользователь анкету перед коучем."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT user_id FROM coach_questionnaire WHERE user_id = ?",
+        (user_id,)
+    ).fetchone()
+    conn.close()
+    return row is not None
+
+
+def save_coach_questionnaire(user_id: int, business_area: str, experience_years: str,
+                              main_challenge: str, team_size: str, annual_revenue: str):
+    conn = get_connection()
+    conn.execute("""
+        INSERT OR REPLACE INTO coach_questionnaire
+        (user_id, business_area, experience_years, main_challenge, team_size, annual_revenue)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (user_id, business_area, experience_years, main_challenge, team_size, annual_revenue))
+    conn.commit()
+    conn.close()
+
+
+def get_coach_questionnaire(user_id: int) -> dict | None:
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT * FROM coach_questionnaire WHERE user_id = ?",
+        (user_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
