@@ -1577,11 +1577,16 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.info("stats_command: user_id=%s, ADMIN_ID=%s, match=%s", user_id, ADMIN_ID, user_id == ADMIN_ID)
+    logger.info("stats_command: user_id=%s (type=%s), ADMIN_ID=%s (type=%s), match=%s",
+                user_id, type(user_id).__name__, ADMIN_ID, type(ADMIN_ID).__name__, user_id == ADMIN_ID)
 
     # Если это админ — показываем дашборд бота
     if ADMIN_ID and user_id == ADMIN_ID:
-        await _admin_stats(update)
+        try:
+            await _admin_stats(update)
+        except Exception as e:
+            logger.error("_admin_stats error: %s", e, exc_info=True)
+            await update.message.reply_text(f"❌ Ошибка админ-статистики: {e}")
         return
 
     # Обычный пользователь — личная статистика
