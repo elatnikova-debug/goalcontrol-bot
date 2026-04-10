@@ -8,6 +8,7 @@ import io
 import logging
 import base64
 import asyncio
+import httpx
 from openai import AsyncOpenAI
 from PIL import Image
 
@@ -17,12 +18,16 @@ _client: AsyncOpenAI | None = None
 
 
 def get_client() -> AsyncOpenAI:
+    """Create or return a cached AsyncOpenAI client with proper timeout."""
     global _client
     if _client is None:
         api_key = os.environ.get("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY не задан в переменных окружения")
-        _client = AsyncOpenAI(api_key=api_key)
+        _client = AsyncOpenAI(
+            api_key=api_key,
+            timeout=httpx.Timeout(180.0, connect=10.0),
+        )
     return _client
 
 
@@ -222,7 +227,6 @@ async def analyze_personality(
                 messages=messages,
                 max_tokens=4000,
                 temperature=0.7,
-                timeout=180,
             )
             result = response.choices[0].message.content
             logger.info("GPT-4o response received, length=%d chars", len(result))
@@ -279,7 +283,6 @@ async def get_goal_advice(
         ],
         max_tokens=800,
         temperature=0.7,
-        timeout=180,
     )
 
     return response.choices[0].message.content

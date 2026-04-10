@@ -312,36 +312,46 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Starting analysis pipeline for user %s", user_id)
 
     try:
-        # Скачиваем фотографии
+        # Скачиваем фотографии (каждую отдельно с обработкой ошибок)
         logger.info("Fetching photos for user %s", user_id)
-        face_file = await context.bot.get_file(context.user_data["face_file_id"])
-        right_file = await context.bot.get_file(context.user_data["right_palm_file_id"])
-        left_file = await context.bot.get_file(context.user_data["left_palm_file_id"])
+        photo_ids = {
+            "face": context.user_data["face_file_id"],
+            "right_palm": context.user_data["right_palm_file_id"],
+            "left_palm": context.user_data["left_palm_file_id"],
+        }
+        photo_labels = {
+            "face": "лица",
+            "right_palm": "правой ладони",
+            "left_palm": "левой ладони",
+        }
+        photo_bytes = {}
+        for key, file_id in photo_ids.items():
+            try:
+                f = await context.bot.get_file(file_id, read_timeout=30, connect_timeout=15)
+                data = await f.download_as_bytearray()
+                if not data or len(data) < 1000:
+                    await update.message.reply_text(
+                        "Фото " + photo_labels[key] + " не получено. Попробуй ещё раз: /analyze"
+                    )
+                    return ConversationHandler.END
+                photo_bytes[key] = bytes(data)
+            except Exception as e:
+                logger.error(
+                    "Failed to download %s photo for user %s: %s: %s",
+                    key, user_id, type(e).__name__, e, exc_info=True,
+                )
+                await update.message.reply_text(
+                    "Не удалось скачать фото " + photo_labels[key]
+                    + ". Попробуй ещё раз: /analyze"
+                )
+                return ConversationHandler.END
 
-        face_bytes = await face_file.download_as_bytearray()
-        right_bytes = await right_file.download_as_bytearray()
-        left_bytes = await left_file.download_as_bytearray()
         logger.info(
             "Photos downloaded for user %s: face=%dB, right=%dB, left=%dB",
-            user_id, len(face_bytes), len(right_bytes), len(left_bytes),
+            user_id, len(photo_bytes["face"]),
+            len(photo_bytes["right_palm"]),
+            len(photo_bytes["left_palm"]),
         )
-
-        # Проверяем что фото не пустые
-        if not face_bytes or len(face_bytes) < 1000:
-            await update.message.reply_text(
-                "Фото лица не получено, попробуй ещё раз: /analyze"
-            )
-            return ConversationHandler.END
-        if not right_bytes or len(right_bytes) < 1000:
-            await update.message.reply_text(
-                "Фото правой ладони не получено, попробуй ещё раз: /analyze"
-            )
-            return ConversationHandler.END
-        if not left_bytes or len(left_bytes) < 1000:
-            await update.message.reply_text(
-                "Фото левой ладони не получено, попробуй ещё раз: /analyze"
-            )
-            return ConversationHandler.END
 
         # Получаем цели пользователя
         goals = db.get_active_goals(user_id)
@@ -353,9 +363,9 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             birth_date=context.user_data["profile_birthdate"],
             birth_city=context.user_data["profile_birthcity"],
             birth_time=context.user_data.get("profile_birthtime"),
-            face_photo_bytes=bytes(face_bytes),
-            right_palm_bytes=bytes(right_bytes),
-            left_palm_bytes=bytes(left_bytes),
+            face_photo_bytes=photo_bytes["face"],
+            right_palm_bytes=photo_bytes["right_palm"],
+            left_palm_bytes=photo_bytes["left_palm"],
             goals=goals,
         )
 
@@ -373,6 +383,7 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             left_palm_photo_id=context.user_data["left_palm_file_id"],
             analysis_result=result,
             analysis_done_at=datetime.utcnow().isoformat(),
+            has_analysis=1,
         )
 
         # Отправляем результат (разбиваем если длинный)
@@ -395,7 +406,7 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🔧 Анализ личности временно недоступен. Администратор уже работает над этим.\n\n"
             "Попробуй снова чуть позже!"
         )
-        logger.error(f"OpenAI API key missing: {e}")
+        logger.error("OpenAI API key missing: %s", e, exc_info=True)
 
     except Exception as e:
         error_type = type(e).__name__
@@ -424,7 +435,8 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         else:
             user_msg = (
-                "Произошла ошибка при анализе. Попробуй снова через минуту.\n"
+                "Произошла ошибка при анализе (" + error_type + "). "
+                "Попробуй снова через минуту.\n"
                 "Если ошибка повторяется — напиши /analyze заново."
             )
         await update.message.reply_text(user_msg)
