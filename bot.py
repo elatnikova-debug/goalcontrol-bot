@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.3.9"
+BOT_VERSION = "2.4.0"
 
 # ========================
 # Админ
@@ -18,7 +18,7 @@ import logging
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
-    ReplyKeyboardMarkup, ReplyKeyboardRemove, KeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton,
     LabeledPrice
 )
 from telegram.ext import (
@@ -173,6 +173,11 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await stars_today(update, context)
     elif text == "💎 PRO-доступ":
         await show_pro_menu(update, context)
+    elif text == "🏠 Главное меню":
+        await update.message.reply_text(
+            "Главное меню 👇",
+            reply_markup=get_main_keyboard()
+        )
 
 
 # ========================
@@ -185,7 +190,8 @@ async def show_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not goals:
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("➕ Создать первую цель", callback_data="new_goal")]
+            [InlineKeyboardButton("➕ Создать первую цель", callback_data="new_goal")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
         ])
         await update.message.reply_text(
             mot.get_no_goals(),
@@ -223,6 +229,7 @@ async def show_goals(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ])
 
     keyboard_buttons.append([InlineKeyboardButton("➕ Новая цель", callback_data="new_goal")])
+    keyboard_buttons.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")])
 
     await update.message.reply_text(
         text,
@@ -264,7 +271,8 @@ async def show_goal_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, g
         [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
         [InlineKeyboardButton("🏁 Завершить цель", callback_data=f"complete_{goal_id}")],
         [InlineKeyboardButton("❌ Отменить цель", callback_data=f"cancel_{goal_id}")],
-        [InlineKeyboardButton("◀️ Назад", callback_data="back_goals")],
+        [InlineKeyboardButton("◀️ Назад", callback_data="back_goals"),
+         InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ]
 
     await query.edit_message_text(
@@ -286,9 +294,10 @@ async def today_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚡ *Фокус на сегодня*\n\nУ тебя нет активных целей. Создай первую — и я помогу держать фокус каждый день!",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+            ])
         )
         return
 
@@ -322,7 +331,7 @@ async def today_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text += f"\n_{mot.get_morning_motivation()}_"
 
-    await update.message.reply_text(text, parse_mode="Markdown")
+    await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
 # ========================
@@ -335,7 +344,8 @@ async def mark_progress_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     if not milestones:
         await update.message.reply_text(
-            "✅ Нет незавершённых этапов. Все цели выполнены — или пора создать новые!"
+            "✅ Нет незавершённых этапов. Все цели выполнены — или пора создать новые!",
+            reply_markup=get_main_keyboard()
         )
         return
 
@@ -349,6 +359,7 @@ async def mark_progress_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 callback_data=f"ms_done_{ms['id']}"
             )
         ])
+    buttons.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")])
 
     await update.message.reply_text(
         text,
@@ -383,6 +394,7 @@ async def send_motivation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     more_buttons = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔥 Ещё цитату", callback_data="quick_motivation"),
          InlineKeyboardButton("⚡ Фокус", callback_data="quick_focus")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ])
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=more_buttons)
 
@@ -407,13 +419,17 @@ async def stars_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔮 Пройти разбор личности", callback_data="start_analyze")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return
 
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
-        await update.message.reply_text("Функция временно недоступна. Попробуй позже.")
+        await update.message.reply_text(
+            "Функция временно недоступна. Попробуй позже.",
+            reply_markup=get_main_keyboard()
+        )
         return
 
     await update.message.chat.send_action("typing")
@@ -471,12 +487,16 @@ async def stars_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
         result = response.choices[0].message.content
         await update.message.reply_text(
             f"🌟 *Звёзды сегодня*\n\n{result}",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
         )
 
     except Exception as e:
         logger.error(f"Stars today error: {e}")
-        await update.message.reply_text("Не удалось получить астро-брифинг. Попробуй через минуту.")
+        await update.message.reply_text(
+            "Не удалось получить астро-брифинг. Попробуй через минуту.",
+            reply_markup=get_main_keyboard()
+        )
 
 
 # ========================
@@ -496,6 +516,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("⭐ LITE — 350 Stars/мес", callback_data="lite_buy")],
                 [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return ConversationHandler.END
@@ -511,7 +532,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "📌 *Вопрос 1/5:* В какой сфере твой бизнес?\n\n"
             "Напиши кратко, например: IT, маркетинг, ресторан, строительство, e-commerce...",
             parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_main_keyboard()
         )
         return CQ_BUSINESS_AREA
 
@@ -775,6 +796,7 @@ async def show_pro_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("🧠 Мой профиль", callback_data="pro_profile"),
                  InlineKeyboardButton("🧪 Профайлинг", callback_data="pro_tests")],
                 [InlineKeyboardButton("🚀 Стратегия роста", callback_data="pro_roadmap")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
     elif tier == "pro":
@@ -788,6 +810,7 @@ async def show_pro_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                  InlineKeyboardButton("🧪 Профайлинг", callback_data="pro_tests")],
                 [InlineKeyboardButton("🚀 Стратегия роста", callback_data="pro_roadmap")],
                 [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
     elif tier == "lite":
@@ -799,6 +822,7 @@ async def show_pro_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
                 [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
     else:
@@ -811,6 +835,7 @@ async def show_pro_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
                 [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
                 [InlineKeyboardButton("❓ Подробнее о тарифах", callback_data="tariff_info")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
 
@@ -950,6 +975,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             text += f"*{goal['title']}* — {bar}\n"
             buttons.append([InlineKeyboardButton(f"📋 {goal['title'][:30]}", callback_data=f"goal_{goal['id']}")])
         buttons.append([InlineKeyboardButton("➕ Новая цель", callback_data="new_goal")])
+        buttons.append([InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")])
         await query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(buttons))
 
     # Завершение этапа
@@ -964,6 +990,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cta_buttons = InlineKeyboardMarkup([
             [InlineKeyboardButton("🔥 Порция мотивации", callback_data="quick_motivation"),
              InlineKeyboardButton("⚡ Фокус", callback_data="quick_focus")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
         ])
         await query.message.reply_text(
             f"{mot.get_reminder_cta()} Продолжай в том же духе!",
@@ -977,6 +1004,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             trigger_3_buttons = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔮 Разбор личности", callback_data="start_analyze")],
                 [InlineKeyboardButton("🤖 Поговорить с коучем", callback_data="start_coach_from_trigger")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
             await query.message.reply_text(
                 trigger_3_text,
@@ -1071,6 +1099,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 [InlineKeyboardButton("⭐ LITE — 350 Stars/мес", callback_data="lite_buy")],
                 [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
                 [InlineKeyboardButton("👑 PREMIUM — 1450 Stars/мес", callback_data="premium_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
 
@@ -1124,7 +1153,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
 
-    elif data == "exit_coach":
+    elif data in ("exit_coach", "menu_main"):
         context.user_data.pop("coach_mode", None)
         await query.edit_message_reply_markup(reply_markup=None)
         await query.message.reply_text(
@@ -1166,7 +1195,8 @@ async def handle_pro_profile(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text(
             "💎 Эта функция доступна в PRO-доступе.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")]
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return
@@ -1189,7 +1219,8 @@ async def handle_pro_profile(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "Используй команду /analyze — это займёт около 3 минут.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔮 Начать анализ", callback_data="start_analyze")]
+                [InlineKeyboardButton("🔮 Начать анализ", callback_data="start_analyze")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
 
@@ -1202,7 +1233,8 @@ async def handle_pro_tests(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "💎 Эта функция доступна в PRO-доступе.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")]
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return
@@ -1228,7 +1260,8 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text(
             "💎 Эта функция доступна в PRO-доступе.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")]
+                [InlineKeyboardButton("💎 PRO — 750 Stars/мес", callback_data="pro_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return
@@ -1240,7 +1273,8 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text(
             "🚀 Для стратегии роста сначала создай хотя бы одну цель.",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")]
+                [InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return
@@ -1285,12 +1319,16 @@ async def handle_pro_roadmap(update: Update, context: ContextTypes.DEFAULT_TYPE)
         result = response.choices[0].message.content
         await query.message.reply_text(
             f"🚀 *Твоя стратегия роста:*\n\n{result}",
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
         )
 
     except Exception as e:
         logger.error(f"Roadmap GPT error: {e}")
-        await query.message.reply_text("Ошибка при генерации стратегии. Попробуй через минуту.")
+        await query.message.reply_text(
+            "Ошибка при генерации стратегии. Попробуй через минуту.",
+            reply_markup=get_main_keyboard()
+        )
 
 
 # ========================
@@ -1402,13 +1440,13 @@ async def newgoal_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.callback_query.message.reply_text(
             smart_text,
             parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_main_keyboard()
         )
     else:
         await update.message.reply_text(
             smart_text,
             parse_mode="Markdown",
-            reply_markup=ReplyKeyboardRemove()
+            reply_markup=get_main_keyboard()
         )
     return GOAL_TITLE
 
@@ -1574,6 +1612,7 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
         [InlineKeyboardButton("⏰ Настроить напоминания", callback_data="setup_reminders")],
         [InlineKeyboardButton("🔥 Порция мотивации", callback_data="quick_motivation")],
         [InlineKeyboardButton("⚡ Фокус на сегодня", callback_data="quick_focus")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ])
     await context.bot.send_message(
         chat_id=user_id,
@@ -1647,7 +1686,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🏷 Тариф: {tier_text}"
     )
 
-    await update.message.reply_text(text.strip(), parse_mode="Markdown")
+    await update.message.reply_text(text.strip(), parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 
 async def _admin_stats(update: Update):
@@ -1783,6 +1822,7 @@ def _settings_keyboard(s: dict):
             ),
         ],
         [InlineKeyboardButton("💾 Сохранить", callback_data="save_settings")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ])
 
 
@@ -1860,6 +1900,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
                         [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                     ])
                 )
         return
@@ -1885,6 +1926,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
                     [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                 ])
             )
         return
@@ -1903,6 +1945,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"✅ Дедлайн изменён на {dl.strftime('%d.%m.%Y')}",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                 ])
             )
         except ValueError:
@@ -1959,13 +2002,26 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Обработчик кнопок меню внутри ConversationHandler
 # ========================
 
-MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🌟 Звёзды сегодня|💎 PRO-доступ)$"
+MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🌟 Звёзды сегодня|💎 PRO-доступ|🏠 Главное меню)$"
 
 
 async def menu_button_exits_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Кнопка меню нажата внутри conversation — выходим и обрабатываем."""
     logger.info(f"Menu button '{update.message.text}' pressed inside conversation — exiting")
     await handle_menu_button(update, context)
+    return ConversationHandler.END
+
+
+async def menu_main_exits_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Inline-кнопка 🏠 Главное меню нажата внутри conversation — выходим."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.pop("coach_mode", None)
+    await query.edit_message_reply_markup(reply_markup=None)
+    await query.message.reply_text(
+        "Возвращаемся в главное меню 👇",
+        reply_markup=get_main_keyboard()
+    )
     return ConversationHandler.END
 
 
@@ -1990,6 +2046,7 @@ def build_application(token: str) -> Application:
             filters.TEXT & filters.Regex(MENU_BUTTONS_PATTERN),
             menu_button_exits_conversation
         ),
+        CallbackQueryHandler(menu_main_exits_conversation, pattern="^menu_main$"),
     ]
 
     # Создание цели

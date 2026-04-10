@@ -71,6 +71,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton("📋 Показать мой анализ", callback_data="show_analysis")],
             [InlineKeyboardButton("🔄 Сделать новый анализ", callback_data="redo_analysis")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
         ])
         await update.message.reply_text(
             "✨ У тебя уже есть анализ личности!\n\nЧто хочешь сделать?",
@@ -87,6 +88,7 @@ async def _ask_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Да, хочу!", callback_data="consent_yes")],
         [InlineKeyboardButton("❌ Не сейчас", callback_data="consent_no")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ])
     text = (
         "🌟 *Могу открыть твою личность по некоторым данным...*\n\n"
@@ -177,7 +179,8 @@ async def got_birthcity(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.user_data["profile_birthcity"] = city
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("⏭ Пропустить (не знаю точно)", callback_data="skip_birthtime")]
+        [InlineKeyboardButton("⏭ Пропустить (не знаю точно)", callback_data="skip_birthtime")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ])
     await update.message.reply_text(
         f"{_progress(4)}\n\n"
@@ -211,7 +214,8 @@ async def got_birthtime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     import re
     if not re.match(r"^\d{1,2}:\d{2}$", text):
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("⏭ Пропустить", callback_data="skip_birthtime")]
+            [InlineKeyboardButton("⏭ Пропустить", callback_data="skip_birthtime")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
         ])
         await update.message.reply_text(
             "Используй формат ЧЧ:ММ, например `14:35`\n\nИли пропусти:",

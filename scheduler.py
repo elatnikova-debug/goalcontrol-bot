@@ -283,6 +283,7 @@ async def send_daily_digests(bot):
                     morning_kb = InlineKeyboardMarkup([
                         [InlineKeyboardButton("⚡ Фокус на сегодня", callback_data="quick_focus")],
                         [InlineKeyboardButton("🔥 Ещё мотивацию", callback_data="quick_motivation")],
+                        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                     ])
                     await bot.send_message(
                         chat_id=user_id, text=text,
@@ -306,6 +307,7 @@ async def send_daily_digests(bot):
                     evening_kb = InlineKeyboardMarkup([
                         [InlineKeyboardButton("✅ Отметить прогресс", callback_data="quick_focus")],
                         [InlineKeyboardButton("🔥 Мотивация", callback_data="quick_motivation")],
+                        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                     ])
                     await bot.send_message(
                         chat_id=user_id, text=text,
@@ -335,6 +337,7 @@ async def check_expiring_subscriptions(bot):
 
             pro_kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton("👑 Продлить PRO-подписку", callback_data="pro_sub_buy")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
             if days_left == 3:
                 await bot.send_message(
