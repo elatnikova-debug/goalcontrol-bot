@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.3.3"
+BOT_VERSION = "2.3.7"
 
 # ========================
 # Админ
@@ -15,8 +15,6 @@ BOT_VERSION = "2.3.3"
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 import logging
 
-# Лог при загрузке модуля
-print(f"[BOOT] ADMIN_ID={ADMIN_ID}")
 from datetime import datetime, timedelta
 from telegram import (
     Update, InlineKeyboardButton, InlineKeyboardMarkup,
@@ -250,7 +248,11 @@ async def show_goal_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, g
     query = update.callback_query
     goal = db.get_goal(goal_id)
     if not goal:
-        await query.edit_message_text("Цель не найдена.")
+        logger.warning("Goal not found: goal_id=%s, user_id=%s", goal_id, query.from_user.id)
+        await query.edit_message_text(
+            "Эта цель была удалена или не найдена.\n\n"
+            "Нажми 🎯 Мои цели и проекты в меню, чтобы увидеть актуальные цели."
+        )
         return
 
     milestones = db.get_milestones(goal_id)
@@ -849,7 +851,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         goal_id = int(data.split("_")[1])
         goal = db.get_goal(goal_id)
         if not goal:
-            await query.edit_message_text("Цель не найдена.")
+            logger.warning("Edit: goal not found: goal_id=%s, user_id=%s", goal_id, user_id)
+            await query.edit_message_text(
+                "Эта цель была удалена или не найдена.\n\n"
+                "Нажми 🎯 Мои цели и проекты в меню."
+            )
             return
         milestones = db.get_milestones(goal_id)
         buttons = []
@@ -872,7 +878,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ms_id = int(data.split("_")[2])
         ms = db.get_milestone(ms_id)
         if not ms:
-            await query.edit_message_text("Этап не найден.")
+            logger.warning("Rename: milestone not found: ms_id=%s, user_id=%s", ms_id, user_id)
+            await query.edit_message_text(
+                "Этап не найден. Возможно, он был удалён.\n\n"
+                "Нажми 🎯 Мои цели и проекты в меню."
+            )
             return
         context.user_data["edit_rename_ms_id"] = ms_id
         context.user_data["edit_rename_goal_id"] = ms["goal_id"]
@@ -890,7 +900,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ms_id = int(data.split("_")[2])
         ms = db.get_milestone(ms_id)
         if not ms:
-            await query.edit_message_text("Этап не найден.")
+            logger.warning("Delete: milestone not found: ms_id=%s, user_id=%s", ms_id, user_id)
+            await query.edit_message_text(
+                "Этап не найден. Возможно, он уже был удалён.\n\n"
+                "Нажми 🎯 Мои цели и проекты в меню."
+            )
             return
         await query.edit_message_text(
             f"Удалить этап *{ms['title']}*?",
@@ -996,6 +1010,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("complete_"):
         goal_id = int(data.split("_")[1])
         goal = db.get_goal(goal_id)
+        if not goal:
+            await query.edit_message_text(
+                "Эта цель была удалена или не найдена.\n\n"
+                "Нажми 🎯 Мои цели и проекты в меню."
+            )
+            return
         buttons = [
             [InlineKeyboardButton("✅ Да, цель достигнута!", callback_data=f"confirm_complete_{goal_id}")],
             [InlineKeyboardButton("◀️ Назад", callback_data=f"goal_{goal_id}")],
@@ -1017,6 +1037,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("cancel_") and data.split("_")[1].isdigit():
         goal_id = int(data.split("_")[1])
         goal = db.get_goal(goal_id)
+        if not goal:
+            await query.edit_message_text(
+                "Эта цель была удалена или не найдена.\n\n"
+                "Нажми 🎯 Мои цели и проекты в меню."
+            )
+            return
         buttons = [
             [InlineKeyboardButton("❌ Да, отменить", callback_data=f"confirm_cancel_{goal_id}")],
             [InlineKeyboardButton("◀️ Назад", callback_data=f"goal_{goal_id}")],
@@ -1577,13 +1603,12 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.info("stats_command: user_id=%s (type=%s), ADMIN_ID=%s (type=%s), match=%s",
-                user_id, type(user_id).__name__, ADMIN_ID, type(ADMIN_ID).__name__, user_id == ADMIN_ID)
+    logger.info("stats_command: user_id=%s, ADMIN_ID=%s, match=%s",
+                user_id, ADMIN_ID, user_id == ADMIN_ID)
 
-    # DEBUG: показать ID пользователя (убрать после отладки)
-    await update.message.reply_text(
-        f"🔧 DEBUG: your_id={user_id}, ADMIN_ID={ADMIN_ID}, match={user_id == ADMIN_ID}"
-    )
+    # Если ADMIN_ID не настроен — сообщить
+    if not ADMIN_ID:
+        logger.warning("ADMIN_ID not set (is 0). Set ADMIN_ID env var to your Telegram user_id.")
 
     # Если это админ — показываем дашборд бота
     if ADMIN_ID and user_id == ADMIN_ID:
