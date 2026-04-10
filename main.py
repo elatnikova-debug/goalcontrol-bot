@@ -5,6 +5,7 @@
 
 import os
 import sys
+import signal
 import asyncio
 import logging
 
@@ -56,8 +57,16 @@ def main():
 
     app.post_init = post_init
 
+    # Graceful shutdown: on SIGTERM (Render sends this before redeploy),
+    # stop polling cleanly so the new instance doesn't get a Conflict error.
+    def handle_sigterm(signum, frame):
+        logger.info("Received SIGTERM — shutting down gracefully")
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, handle_sigterm)
+
     # Запускаем бота
-    logger.info(f"Starting bot v{BOT_VERSION}... (press Ctrl+C to stop)")
+    logger.info("Starting bot v%s... (press Ctrl+C to stop)", BOT_VERSION)
     app.run_polling(
         allowed_updates=[
             "message",
@@ -65,6 +74,7 @@ def main():
             "pre_checkout_query",
         ],
         drop_pending_updates=True,
+        close_loop=False,
     )
 
 

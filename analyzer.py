@@ -206,30 +206,38 @@ async def analyze_personality(
         },
     ]
 
-    logger.info(f"Sending analysis request to GPT-4o for user data: {full_name}")
-    logger.info(f"Image sizes: face={len(face_photo_bytes)}B, right={len(right_palm_bytes)}B, left={len(left_palm_bytes)}B")
+    logger.info("Starting analysis for user: %s", full_name)
+    logger.info(
+        "Image sizes: face=%dB, right=%dB, left=%dB",
+        len(face_photo_bytes), len(right_palm_bytes), len(left_palm_bytes),
+    )
 
     # Retry logic: GPT-4o vision can be flaky
     last_error = None
     for attempt in range(3):
         try:
+            logger.info("Calling GPT-4o (attempt %d/3) for user: %s", attempt + 1, full_name)
             response = await client.chat.completions.create(
                 model="gpt-4o",
                 messages=messages,
                 max_tokens=4000,
                 temperature=0.7,
-                timeout=60,
+                timeout=180,
             )
             result = response.choices[0].message.content
-            logger.info("GPT-4o analysis completed successfully")
+            logger.info("GPT-4o response received, length=%d chars", len(result))
             return result
         except Exception as e:
             last_error = e
-            logger.error(f"GPT-4o attempt {attempt+1}/3 failed: {type(e).__name__}: {e}")
+            logger.error(
+                "GPT-4o attempt %d/3 failed: %s: %s",
+                attempt + 1, type(e).__name__, e,
+                exc_info=True,
+            )
             if attempt < 2:
                 await asyncio.sleep(2 ** attempt)  # 1s, 2s backoff
 
-    logger.error(f"GPT-4o analysis FAILED after 3 attempts: {last_error}")
+    logger.error("GPT-4o analysis FAILED after 3 attempts: %s", last_error, exc_info=True)
     raise last_error
 
 
@@ -271,7 +279,7 @@ async def get_goal_advice(
         ],
         max_tokens=800,
         temperature=0.7,
-        timeout=60,
+        timeout=180,
     )
 
     return response.choices[0].message.content

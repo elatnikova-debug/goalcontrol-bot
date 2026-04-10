@@ -309,9 +309,11 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     user_id = update.effective_user.id
+    logger.info("Starting analysis pipeline for user %s", user_id)
 
     try:
         # Скачиваем фотографии
+        logger.info("Fetching photos for user %s", user_id)
         face_file = await context.bot.get_file(context.user_data["face_file_id"])
         right_file = await context.bot.get_file(context.user_data["right_palm_file_id"])
         left_file = await context.bot.get_file(context.user_data["left_palm_file_id"])
@@ -319,6 +321,10 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         face_bytes = await face_file.download_as_bytearray()
         right_bytes = await right_file.download_as_bytearray()
         left_bytes = await left_file.download_as_bytearray()
+        logger.info(
+            "Photos downloaded for user %s: face=%dB, right=%dB, left=%dB",
+            user_id, len(face_bytes), len(right_bytes), len(left_bytes),
+        )
 
         # Проверяем что фото не пустые
         if not face_bytes or len(face_bytes) < 1000:
@@ -341,6 +347,7 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         goals = db.get_active_goals(user_id)
 
         # Запускаем AI анализ
+        logger.info("Calling GPT-4o analyze_personality for user %s", user_id)
         result = await ai.analyze_personality(
             full_name=context.user_data["profile_name"],
             birth_date=context.user_data["profile_birthdate"],
@@ -353,6 +360,7 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Сохраняем в профиль
+        logger.info("GPT-4o analysis done for user %s, saving to DB", user_id)
         from datetime import datetime
         db.save_user_profile(
             user_id,
@@ -368,6 +376,7 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
         # Отправляем результат (разбиваем если длинный)
+        logger.info("Sending analysis result to user %s (%d chars)", user_id, len(result))
         await _send_long_message(update, result)
 
         # Финальное сообщение
@@ -391,22 +400,31 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         error_type = type(e).__name__
         error_msg = str(e)[:200]
-        logger.error(f"Analysis error for user {user_id}: {error_type}: {error_msg}", exc_info=True)
+        logger.error(
+            "Analysis error for user %s: %s: %s",
+            user_id, error_type, error_msg,
+            exc_info=True,
+        )
 
         # Более понятное сообщение в зависимости от типа ошибки
-        if "rate_limit" in error_msg.lower() or "429" in error_msg:
+        if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
             user_msg = (
-                "⏳ Слишком много запросов. Попробуй через 2-3 минуты.\n"
+                "Анализ занял слишком много времени. "
+                "Попробуй снова — напиши /analyze"
+            )
+        elif "rate_limit" in error_msg.lower() or "429" in error_msg:
+            user_msg = (
+                "Слишком много запросов. Попробуй через 2-3 минуты.\n"
                 "Напиши /analyze чтобы начать заново."
             )
         elif "api_key" in error_msg.lower() or "auth" in error_msg.lower():
             user_msg = (
-                "🔧 Анализ временно недоступен. Администратор уже работает над этим.\n"
+                "Анализ временно недоступен. Администратор уже работает над этим.\n"
                 "Попробуй чуть позже!"
             )
         else:
             user_msg = (
-                "😔 Произошла ошибка при анализе. Попробуй снова через минуту.\n"
+                "Произошла ошибка при анализе. Попробуй снова через минуту.\n"
                 "Если ошибка повторяется — напиши /analyze заново."
             )
         await update.message.reply_text(user_msg)
@@ -459,13 +477,20 @@ async def _send_long_message(update: Update, text: str, chunk_size: int = 4000):
     """Разбить длинное сообщение на части и отправить."""
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i + chunk_size]
-        await update.message.reply_text(chunk, parse_mode="Markdown")
+        try:
+            await update.message.reply_text(chunk, parse_mode="Markdown")
+        except Exception:
+            # Markdown parse error — send as plain text
+            await update.message.reply_text(chunk)
 
 
 async def _send_long_message_to_chat(bot, chat_id: int, text: str, chunk_size: int = 4000):
     for i in range(0, len(text), chunk_size):
         chunk = text[i:i + chunk_size]
-        await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+        try:
+            await bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+        except Exception:
+            await bot.send_message(chat_id=chat_id, text=chunk)
 
 
 def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
