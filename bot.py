@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.3.8"
+BOT_VERSION = "2.3.9"
 
 # ========================
 # Админ
@@ -93,21 +93,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         name = user.first_name or "предприниматель"
 
         try:
-            sub = db.get_subscription_status(user.id)
-            if sub["status"] == "trial":
-                status_text = f"🆓 Пробный период: {sub['days_left']} дней осталось"
-            elif sub["status"] == "active":
-                status_text = f"👑 Подписка активна до {sub['expires_at']}"
-            else:
-                status_text = "⏰ Пробный период завершён"
-        except Exception as e:
-            logger.error(f"Error getting subscription: {e}")
-            status_text = ""
-
-        try:
             tier = db.get_user_tier(user.id)
             tier_labels = {
-                "free": "",
+                "free": "🆓 FREE-доступ — бесплатно навсегда. Хочешь больше? /subscribe",
                 "lite": "⭐ LITE-доступ: активен",
                 "pro": "💎 PRO-доступ: активен",
                 "premium": "👑 PREMIUM-доступ: активен",
@@ -121,7 +109,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"Привет, {name}! 🚀\n\n"
             f"Я твой персональный коуч-трекер для предпринимателей.\n"
             f"Помогаю ставить цели, держать фокус и расти быстрее.\n\n"
-            f"{status_text}\n"
             f"{tier_text}\n\n"
             f"Выбери действие в меню ниже 👇\n"
             f"\n• v{BOT_VERSION}"
@@ -750,15 +737,23 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
             if remaining_after <= 2:
                 footer += "\n\n⭐ Хочешь без ограничений? Подключи подписку: /pro"
 
+        coach_exit_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="exit_coach")]
+        ])
         await update.message.reply_text(
             reply + footer,
-            parse_mode="Markdown"
+            parse_mode="Markdown",
+            reply_markup=coach_exit_kb
         )
 
     except Exception as e:
         logger.error("Coach GPT error: %s", e, exc_info=True)
+        coach_exit_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="exit_coach")]
+        ])
         await update.message.reply_text(
-            "Что-то пошло не так. Попробуй ещё раз через минуту."
+            "Что-то пошло не так. Попробуй ещё раз через минуту.",
+            reply_markup=coach_exit_kb
         )
 
 
@@ -1127,6 +1122,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Я задам несколько вопросов — это займёт около 3 минут.\n"
             "После этого ты получишь подробный профиль и доступ к 🌟 Звёзды сегодня.",
             parse_mode="Markdown"
+        )
+
+    elif data == "exit_coach":
+        context.user_data.pop("coach_mode", None)
+        await query.edit_message_reply_markup(reply_markup=None)
+        await query.message.reply_text(
+            "Возвращаемся в главное меню 👇",
+            reply_markup=get_main_keyboard()
         )
 
     elif data == "start_coach_from_trigger":
@@ -1620,20 +1623,18 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     sub = db.get_subscription_status(user_id)
     tier = db.get_user_tier(user_id)
 
-    if sub["status"] == "trial":
-        sub_text = f"🆓 Пробный период: {sub['days_left']} дн."
-    elif sub["status"] == "active":
+    if sub["status"] == "active":
         sub_text = f"👑 Подписка до {sub['expires_at']}"
     else:
-        sub_text = "⏰ Пробный период завершён"
+        sub_text = "🆓 FREE — бесплатно навсегда"
 
     tier_labels = {
-        "free": "Бесплатный",
+        "free": "🆓 FREE",
         "lite": "⭐ LITE",
         "pro": "💎 PRO",
         "premium": "👑 PREMIUM",
     }
-    tier_text = tier_labels.get(tier, "Бесплатный")
+    tier_text = tier_labels.get(tier, "🆓 FREE")
 
     text = (
         f"📊 *Твоя статистика*\n\n"

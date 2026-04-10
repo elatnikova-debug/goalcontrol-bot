@@ -367,58 +367,6 @@ async def check_expiring_subscriptions(bot):
             logger.error(f"Subscription check error for user {user['user_id']}: {e}")
 
 
-async def check_expiring_trials(bot):
-    """Предупредить пользователей об окончании trial периода."""
-    conn = db.get_connection()
-    users = conn.execute(
-        "SELECT * FROM users WHERE trial_started_at IS NOT NULL AND subscription_active = 0"
-    ).fetchall()
-    conn.close()
-
-    now = datetime.utcnow()
-
-    for user in users:
-        try:
-            trial_start = datetime.fromisoformat(user["trial_started_at"])
-            trial_end = trial_start + timedelta(days=db.TRIAL_DAYS)
-            days_left = (trial_end.date() - now.date()).days
-
-            trial_kb = InlineKeyboardMarkup([
-                [InlineKeyboardButton("💎 PRO-доступ — 950 Stars", callback_data="pro_buy")],
-                [InlineKeyboardButton("👑 PRO-подписка — 1450 Stars/мес", callback_data="pro_sub_buy")],
-            ])
-            if days_left == 7:
-                await bot.send_message(
-                    chat_id=user["user_id"],
-                    text=(
-                        "📢 Уже 3 недели вместе! 🎉\n\n"
-                        "Ты отлично двигаешься к своим целям! "
-                        "Через 7 дней закончится бесплатный период.\n\n"
-                        "Хочешь продолжить без ограничений?"
-                    ),
-                    reply_markup=trial_kb
-                )
-            elif days_left == 3:
-                await bot.send_message(
-                    chat_id=user["user_id"],
-                    text=(
-                        "⏰ До конца бесплатного периода осталось 3 дня!"
-                    ),
-                    reply_markup=trial_kb
-                )
-            elif days_left == 1:
-                await bot.send_message(
-                    chat_id=user["user_id"],
-                    text=(
-                        "🚨 Завтра заканчивается бесплатный период!\n\n"
-                        "Не упусти момент — PRO откроет полный доступ!"
-                    ),
-                    reply_markup=trial_kb
-                )
-        except Exception as e:
-            logger.error(f"Trial check error for user {user['user_id']}: {e}")
-
-
 async def scheduler_loop(bot):
     """Основной цикл планировщика. Запускается каждую минуту."""
     logger.info("Scheduler started")
@@ -441,7 +389,6 @@ async def scheduler_loop(bot):
             # Проверка подписок — раз в час (в :00)
             if now.minute == 0:
                 await check_expiring_subscriptions(bot)
-                await check_expiring_trials(bot)
 
         except Exception as e:
             logger.error(f"Scheduler loop error: {e}")

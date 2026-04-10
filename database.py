@@ -164,10 +164,9 @@ def ensure_user(user_id: int, username: str = None, first_name: str = None):
     conn = get_connection()
     existing = conn.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)).fetchone()
     if not existing:
-        now = datetime.utcnow().isoformat()
         conn.execute(
-            "INSERT INTO users (user_id, username, first_name, trial_started_at) VALUES (?, ?, ?, ?)",
-            (user_id, username, first_name, now)
+            "INSERT INTO users (user_id, username, first_name) VALUES (?, ?, ?)",
+            (user_id, username, first_name)
         )
         conn.commit()
     conn.close()
@@ -182,13 +181,10 @@ def get_user(user_id: int):
 
 # --- Подписка ---
 
-TRIAL_DAYS = 30
-
-
 def get_subscription_status(user_id: int) -> dict:
     user = get_user(user_id)
     if not user:
-        return {"status": "expired", "days_left": 0, "expires_at": None}
+        return {"status": "free", "days_left": 0, "expires_at": None}
 
     now = datetime.utcnow()
 
@@ -202,23 +198,12 @@ def get_subscription_status(user_id: int) -> dict:
                 "expires_at": expires.strftime("%d.%m.%Y"),
             }
 
-    if user["trial_started_at"]:
-        trial_start = datetime.fromisoformat(user["trial_started_at"])
-        trial_end = trial_start + timedelta(days=TRIAL_DAYS)
-        if trial_end > now:
-            days_left = (trial_end.date() - now.date()).days
-            return {
-                "status": "trial",
-                "days_left": days_left,
-                "expires_at": trial_end.strftime("%d.%m.%Y"),
-            }
-
-    return {"status": "expired", "days_left": 0, "expires_at": None}
+    return {"status": "free", "days_left": 0, "expires_at": None}
 
 
 def is_subscription_valid(user_id: int) -> bool:
     status = get_subscription_status(user_id)
-    return status["status"] in ("trial", "active")
+    return status["status"] == "active"
 
 
 def activate_subscription(user_id: int, days: int = 30):
