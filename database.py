@@ -101,6 +101,7 @@ def init_db():
             left_palm_photo_id TEXT,
             analysis_result TEXT,
             analysis_done_at TEXT,
+            has_analysis INTEGER DEFAULT 0,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
 
@@ -156,6 +157,15 @@ def init_db():
     """)
     conn.commit()
     conn.close()
+
+    # Миграция: добавить has_analysis если отсутствует
+    try:
+        conn = get_connection()
+        conn.execute("ALTER TABLE user_profile ADD COLUMN has_analysis INTEGER DEFAULT 0")
+        conn.commit()
+        conn.close()
+    except sqlite3.OperationalError:
+        pass
 
 
 # --- Пользователи ---
@@ -600,7 +610,7 @@ def get_user_profile(user_id: int) -> dict | None:
 PROFILE_COLUMNS = {
     "full_name", "birth_date", "birth_city", "birth_time",
     "face_photo_id", "right_palm_photo_id", "left_palm_photo_id",
-    "analysis_result", "analysis_done_at",
+    "analysis_result", "analysis_done_at", "has_analysis",
 }
 
 
@@ -640,6 +650,28 @@ def profile_is_complete(user_id: int) -> bool:
 def profile_analysis_done(user_id: int) -> bool:
     p = get_user_profile(user_id)
     return bool(p and p.get("analysis_result"))
+
+
+def set_has_analysis(user_id: int):
+    """Отметить, что пользователь оплатил/получил персональный разбор."""
+    conn = get_connection()
+    conn.execute("INSERT OR IGNORE INTO user_profile (user_id) VALUES (?)", (user_id,))
+    conn.execute(
+        "UPDATE user_profile SET has_analysis = 1 WHERE user_id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_has_analysis(user_id: int) -> bool:
+    """Есть ли у пользователя оплаченный персональный разбор."""
+    conn = get_connection()
+    row = conn.execute(
+        "SELECT has_analysis FROM user_profile WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    conn.close()
+    return bool(row and row["has_analysis"])
 
 
 # --- Настройки пользователя ---

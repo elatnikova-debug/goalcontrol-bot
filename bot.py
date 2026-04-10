@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.4.0"
+BOT_VERSION = "2.4.2"
 
 # ========================
 # Админ
@@ -42,6 +42,7 @@ logger = logging.getLogger(__name__)
 LITE_PRICE_STARS = db.LITE_PRICE_STARS        # 350 Stars ≈ $7/мес
 PRO_PRICE_STARS = db.PRO_PRICE_STARS          # 750 Stars ≈ $15/мес
 PRO_SUB_PRICE_STARS = db.PRO_SUB_PRICE_STARS  # 1450 Stars ≈ $29/мес
+ANALYSIS_PRICE_STARS = int(os.getenv("ANALYSIS_PRICE_STARS", "500"))  # 500 Stars ≈ $10
 
 # ========================
 # Состояния ConversationHandler
@@ -73,7 +74,7 @@ def get_main_keyboard():
     keyboard = [
         [KeyboardButton("🎯 Мои цели и проекты"), KeyboardButton("⚡ Фокус на сегодня")],
         [KeyboardButton("✅ Отметить прогресс"), KeyboardButton("🔥 Энергия и драйв")],
-        [KeyboardButton("🤖 Коуч"), KeyboardButton("🌟 Звёзды сегодня")],
+        [KeyboardButton("🤖 Коуч"), KeyboardButton("🔮 Персональный разбор")],
         [KeyboardButton("💎 PRO-доступ")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
@@ -169,8 +170,8 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await send_motivation(update, context)
     elif text == "🤖 Коуч":
         await start_coach(update, context)
-    elif text == "🌟 Звёзды сегодня":
-        await stars_today(update, context)
+    elif text == "🔮 Персональный разбор":
+        await personal_analysis_menu(update, context)
     elif text == "💎 PRO-доступ":
         await show_pro_menu(update, context)
     elif text == "🏠 Главное меню":
@@ -400,103 +401,152 @@ async def send_motivation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ========================
-# 🌟 Звёзды сегодня
+# 🔮 Персональный разбор
 # ========================
 
-async def stars_today(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Астро-советы — только после разбора личности (нужна дата/время рождения)."""
+ANALYSIS_MARKETING_TEXT = (
+    "🔮 *Персональный разбор — твой уникальный код*"
+    + chr(10) + chr(10)
+    + "Это не гороскоп из интернета. Это глубокий анализ именно тебя:"
+    + chr(10) + chr(10)
+    + "✨ Астрология — твои сильные планеты и периоды роста"
+    + chr(10)
+    + "🤲 Хиромантия — линии судьбы и таланты на ладонях"
+    + chr(10)
+    + "🧠 Нумерология — твой жизненный путь и предназначение"
+    + chr(10)
+    + "👁 Психотип по лицу — как ты принимаешь решения"
+    + chr(10) + chr(10)
+    + "Результат: персональный отчёт на 2000+ слов, который остаётся с тобой навсегда."
+    + chr(10) + chr(10)
+    + "💎 Разовая оплата — 500 Stars (~$10)"
+    + chr(10)
+    + "После оплаты результаты сохраняются и доступны в любое время."
+)
+
+
+async def personal_analysis_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Персональный разбор — платный одноразовый анализ."""
     user_id = update.effective_user.id
 
-    # Проверяем профиль
-    profile = db.get_user_profile(user_id)
-    if not profile or not profile.get("birth_date"):
+    # Если уже есть оплаченный анализ — показать результат
+    if db.get_has_analysis(user_id):
+        profile = db.get_user_profile(user_id)
+        if profile and profile.get("analysis_result"):
+            await update.message.reply_text(
+                "🔮 *Твой персональный разбор уже готов!*",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("📋 Показать мой разбор", callback_data="show_paid_analysis")],
+                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+                ])
+            )
+            return
+
+    # Если у пользователя PRO/PREMIUM — анализ включён бесплатно
+    tier = db.get_user_tier(user_id)
+    if tier in ("pro", "premium"):
         await update.message.reply_text(
-            "🌟 *Звёзды сегодня*\n\n"
-            "Чтобы получить персональный астро-брифинг, мне нужны твои данные рождения.\n\n"
-            "Пройди разбор личности — это займёт 3 минуты, "
-            "и после этого каждый день будешь получать личный астро-брифинг "
-            "с советами по переговорам, финансам и бизнесу.",
+            "🔮 *Персональный разбор*"
+            + chr(10) + chr(10)
+            + "У тебя " + ("💎 PRO" if tier == "pro" else "👑 PREMIUM")
+            + "-подписка — персональный разбор включён бесплатно!"
+            + chr(10) + chr(10)
+            + "Нажми кнопку ниже, чтобы начать анализ.",
             parse_mode="Markdown",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("🔮 Пройти разбор личности", callback_data="start_analyze")],
+                [InlineKeyboardButton("🔮 Начать разбор", callback_data="start_free_analysis")],
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
         return
 
-    api_key = os.environ.get("OPENAI_API_KEY")
-    if not api_key:
-        await update.message.reply_text(
-            "Функция временно недоступна. Попробуй позже.",
-            reply_markup=get_main_keyboard()
+    # Показываем маркетинговый текст и кнопку оплаты
+    await update.message.reply_text(
+        ANALYSIS_MARKETING_TEXT,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "💳 Оплатить 500 Stars",
+                callback_data="analysis_buy"
+            )],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+        ])
+    )
+
+
+async def send_analysis_invoice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Отправить счёт на оплату персонального разбора."""
+    query = update.callback_query
+    user_id = query.from_user.id
+
+    # Проверка — вдруг уже оплачен
+    if db.get_has_analysis(user_id):
+        await query.edit_message_text(
+            "✨ У тебя уже есть персональный разбор! Используй /analyze чтобы посмотреть."
         )
         return
 
-    await update.message.chat.send_action("typing")
-
-    goals = db.get_active_goals(user_id)
-    today = datetime.now().strftime("%d.%m.%Y, %A")
-    name = profile.get("full_name", "")
-    birth_date = profile.get("birth_date", "")
-    birth_city = profile.get("birth_city", "")
-    birth_time = profile.get("birth_time", "не указано")
-    analysis = profile.get("analysis_result", "")[:800]
-
-    goals_text = ""
-    if goals:
-        goals_text = "\nАктивные цели: " + ", ".join(g['title'] for g in goals[:5])
-
-    prompt = (
-        f"Персональный астро-брифинг для предпринимателя.\n\n"
-        f"Имя: {name}\n"
-        f"Дата рождения: {birth_date}\n"
-        f"Город рождения: {birth_city}\n"
-        f"Время рождения: {birth_time}\n"
-        f"Сегодня: {today}\n"
-        f"{goals_text}\n\n"
-        f"Краткий психопрофиль:\n{analysis}\n\n"
-        "Дай персональный астро-брифинг именно для этого человека на сегодня:\n"
-        "🌟 ЭНЕРГИЯ ДНЯ — транзиты относительно его натальной карты, что это значит для бизнеса\n"
-        "🤝 ПЕРЕГОВОРЫ — лучшее время для важных встреч, стиль переговоров на сегодня, чего избегать\n"
-        "💰 ДЕНЬГИ — финансовый совет с учётом его психотипа и звёзд\n"
-        "🎯 ГЛАВНЫЙ СОВЕТ — одно конкретное действие для продвижения к его целям\n\n"
-        "Стиль: уверенный, конкретный, как личный консультант. "
-        "Обращайся по имени. Отвечай на русском. Максимум 300 слов."
-    )
+    # Если PRO/PREMIUM — бесплатно
+    tier = db.get_user_tier(user_id)
+    if tier in ("pro", "premium"):
+        db.set_has_analysis(user_id)
+        await query.edit_message_text(
+            "✨ Разбор активирован бесплатно по твоей подписке!"
+            + chr(10)
+            + "Запусти /analyze чтобы начать."
+        )
+        return
 
     try:
-        from openai import AsyncOpenAI
-        client = AsyncOpenAI(api_key=api_key)
-
-        response = await client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": (
-                    "Ты — персональный астролог-консультант для предпринимателей и топ-менеджеров. "
-                    "Ты знаешь натальную карту клиента и текущие транзиты. "
-                    "Твои советы опираются на астрологию, но подаются как практичные бизнес-рекомендации. "
-                    "Особое внимание: переговоры, финансы, тайминг важных решений. "
-                    "Отвечай на русском."
-                )},
-                {"role": "user", "content": prompt},
-            ],
-            max_tokens=600,
-            temperature=0.8,
+        await context.bot.send_invoice(
+            chat_id=user_id,
+            title="🔮 Персональный разбор",
+            description="Глубокий анализ: астрология + хиромантия + нумерология + психотип. Навсегда.",
+            payload="personal_analysis",
+            currency="XTR",
+            prices=[LabeledPrice(label="Персональный разбор", amount=ANALYSIS_PRICE_STARS)],
         )
-
-        result = response.choices[0].message.content
-        await update.message.reply_text(
-            f"🌟 *Звёзды сегодня*\n\n{result}",
-            parse_mode="Markdown",
-            reply_markup=get_main_keyboard()
-        )
-
     except Exception as e:
-        logger.error(f"Stars today error: {e}")
-        await update.message.reply_text(
-            "Не удалось получить астро-брифинг. Попробуй через минуту.",
+        logger.error(f"Analysis invoice error: {e}")
+        await query.message.reply_text(
+            "Ошибка при создании счёта. Попробуй через минуту.",
             reply_markup=get_main_keyboard()
         )
+
+
+async def start_free_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """PRO/PREMIUM пользователь начинает бесплатный анализ."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+    db.set_has_analysis(user_id)
+    await query.edit_message_text(
+        "✨ Персональный разбор активирован!"
+        + chr(10) + chr(10)
+        + "Запусти /analyze — я задам несколько вопросов и проведу глубокий анализ."
+    )
+
+
+async def show_paid_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать сохранённый оплаченный разбор."""
+    query = update.callback_query
+    await query.answer()
+    user_id = query.from_user.id
+
+    profile = db.get_user_profile(user_id)
+    if not profile or not profile.get("analysis_result"):
+        await query.edit_message_text(
+            "Разбор ещё не выполнен. Запусти /analyze чтобы начать."
+        )
+        return
+
+    await query.edit_message_text("📋 Загружаю твой разбор...")
+    result = profile["analysis_result"]
+    chat_id = query.message.chat.id
+    for i in range(0, len(result), 4000):
+        chunk = result[i:i + 4000]
+        await context.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
 
 
 # ========================
@@ -1150,9 +1200,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(
             "🔮 Для разбора личности используй команду /analyze\n\n"
             "Я задам несколько вопросов — это займёт около 3 минут.\n"
-            "После этого ты получишь подробный профиль и доступ к 🌟 Звёзды сегодня.",
+            "После этого ты получишь подробный профиль с персональной стратегией.",
             parse_mode="Markdown"
         )
+
+    elif data == "analysis_buy":
+        await send_analysis_invoice(update, context)
+
+    elif data == "start_free_analysis":
+        await start_free_analysis_callback(update, context)
+
+    elif data == "show_paid_analysis":
+        await show_paid_analysis_callback(update, context)
 
     elif data in ("exit_coach", "menu_main"):
         context.user_data.pop("coach_mode", None)
@@ -1389,6 +1448,24 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     charge_id = payment.telegram_payment_charge_id
     amount = payment.total_amount
 
+    # Сохраняем платёж
+    db.save_payment(user_id, charge_id, "", amount, "XTR", payload)
+
+    # Персональный разбор — разовая покупка
+    if payload == "personal_analysis":
+        db.set_has_analysis(user_id)
+        await update.message.reply_text(
+            "🎉 *Оплата прошла! Персональный разбор активирован!*"
+            + chr(10) + chr(10)
+            + "Теперь запусти /analyze — я задам несколько вопросов "
+            + "и проведу глубокий анализ твоей личности."
+            + chr(10) + chr(10)
+            + "Результат сохранится навсегда.",
+            parse_mode="Markdown",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
     tier_labels = {
         "lite_sub": ("⭐", "LITE"),
         "pro_sub": ("💎", "PRO"),
@@ -1400,12 +1477,13 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
     # Активируем подписку
     db.activate_subscription(user_id, days=30)
     db.save_pro_purchase(user_id, payload, charge_id, amount)
-    db.save_payment(user_id, charge_id, "", amount, "XTR", payload)
 
     await update.message.reply_text(
-        f"🎉 *{icon} {label}-подписка активирована на 30 дней!*\n\n"
-        f"Все функции тарифа {label} теперь твои.\n\n"
-        f"Нажми 🤖 Коуч — никаких ограничений.",
+        f"🎉 *{icon} {label}-подписка активирована на 30 дней!*"
+        + chr(10) + chr(10)
+        + f"Все функции тарифа {label} теперь твои."
+        + chr(10) + chr(10)
+        + "Нажми 🤖 Коуч — никаких ограничений.",
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
@@ -1746,7 +1824,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "✅ *Отметить прогресс* — отметить выполненный этап\n"
         "🔥 *Энергия и драйв* — мотивация от лучших мировых лидеров\n"
         "🤖 *Коуч* — чат с AI-коучем (20 сообщений/день бесплатно)\n"
-        "🌟 *Звёзды сегодня* — персональный астро-брифинг\n"
+        "🔮 *Персональный разбор* — глубокий анализ личности\n"
         "💎 *PRO-доступ* — разблокировать мощные инструменты\n\n"
         "*Команды:*\n"
         "/newgoal — создать новую цель\n"
@@ -1755,7 +1833,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/settings — настройки напоминаний\n"
         "/start — главное меню\n\n"
         "*Тарифы:*\n"
-        "⭐ LITE ($7/мес) — безлимит коуч + звёзды\n"
+        "⭐ LITE ($7/мес) — безлимит коуч\n"
         "💎 PRO ($15/мес) — + профиль + профайлинг + стратегия\n"
         "👑 PREMIUM ($29/мес) — + еженедельные разборы + приоритет"
     )
@@ -2003,7 +2081,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Обработчик кнопок меню внутри ConversationHandler
 # ========================
 
-MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🌟 Звёзды сегодня|💎 PRO-доступ|🏠 Главное меню)$"
+MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🔮 Персональный разбор|💎 PRO-доступ|🏠 Главное меню)$"
 
 
 async def menu_button_exits_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

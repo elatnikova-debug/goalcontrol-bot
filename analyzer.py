@@ -151,7 +151,9 @@ async def analyze_personality(
     if goals:
         goals_text = "\n\nЦЕЛИ ЧЕЛОВЕКА:\n"
         for i, g in enumerate(goals, 1):
-            goals_text += f"{i}. {g['title']} (дедлайн: {g.get('deadline', 'не указан')})\n"
+            g = dict(g) if not isinstance(g, dict) else g
+            deadline = g['deadline'] if g['deadline'] else 'не указан'
+            goals_text += f"{i}. {g['title']} (дедлайн: {deadline})\n"
             if g.get("description"):
                 goals_text += f"   Описание: {g['description']}\n"
 
