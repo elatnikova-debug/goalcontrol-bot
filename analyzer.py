@@ -4,10 +4,12 @@
 """
 
 import os
+import io
 import logging
 import base64
 import asyncio
 from openai import AsyncOpenAI
+from PIL import Image
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +24,23 @@ def get_client() -> AsyncOpenAI:
             raise ValueError("OPENAI_API_KEY не задан в переменных окружения")
         _client = AsyncOpenAI(api_key=api_key)
     return _client
+
+
+def _resize_image(image_bytes: bytes, max_size: int = 800) -> bytes:
+    """Resize image to max_size on longest side, compress to JPEG quality 70."""
+    try:
+        img = Image.open(io.BytesIO(image_bytes))
+        img = img.convert("RGB")
+        ratio = min(max_size / img.width, max_size / img.height, 1.0)
+        if ratio < 1.0:
+            new_w = int(img.width * ratio)
+            new_h = int(img.height * ratio)
+            img = img.resize((new_w, new_h), Image.LANCZOS)
+        out = io.BytesIO()
+        img.save(out, format="JPEG", quality=70)
+        return out.getvalue()
+    except Exception:
+        return image_bytes
 
 
 MEGA_SYSTEM_PROMPT = """
@@ -153,6 +172,11 @@ async def analyze_personality(
         "Особое внимание удели стратегии достижения КОНКРЕТНЫХ ЦЕЛЕЙ этого человека."
     )
 
+    # Сжимаем фото перед отправкой (макс 800px, JPEG q70)
+    face_photo_bytes = _resize_image(face_photo_bytes)
+    right_palm_bytes = _resize_image(right_palm_bytes)
+    left_palm_bytes = _resize_image(left_palm_bytes)
+
     # Кодируем фото в base64
     face_b64 = base64.b64encode(face_photo_bytes).decode()
     right_b64 = base64.b64encode(right_palm_bytes).decode()
@@ -166,15 +190,15 @@ async def analyze_personality(
                 {"type": "text", "text": user_text},
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{face_b64}", "detail": "high"},
+                    "image_url": {"url": f"data:image/jpeg;base64,{face_b64}", "detail": "low"},
                 },
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{right_b64}", "detail": "high"},
+                    "image_url": {"url": f"data:image/jpeg;base64,{right_b64}", "detail": "low"},
                 },
                 {
                     "type": "image_url",
-                    "image_url": {"url": f"data:image/jpeg;base64,{left_b64}", "detail": "high"},
+                    "image_url": {"url": f"data:image/jpeg;base64,{left_b64}", "detail": "low"},
                 },
             ],
         },
@@ -192,15 +216,16 @@ async def analyze_personality(
                 messages=messages,
                 max_tokens=4000,
                 temperature=0.7,
+                timeout=60,
             )
             result = response.choices[0].message.content
             logger.info("GPT-4o analysis completed successfully")
             return result
         except Exception as e:
             last_error = e
-            logger.warning(f"GPT-4o attempt {attempt+1}/3 failed: {type(e).__name__}: {e}")
+            logger.error(f"GPT-4o attempt {attempt+1}/3 failed: {type(e).__name__}: {e}")
             if attempt < 2:
-                await asyncio.sleep(3 * (attempt + 1))  # 3s, 6s backoff
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s backoff
 
     logger.error(f"GPT-4o analysis FAILED after 3 attempts: {last_error}")
     raise last_error
@@ -244,6 +269,7 @@ async def get_goal_advice(
         ],
         max_tokens=800,
         temperature=0.7,
+        timeout=60,
     )
 
     return response.choices[0].message.content

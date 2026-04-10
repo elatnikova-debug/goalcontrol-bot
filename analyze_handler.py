@@ -320,6 +320,23 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
         right_bytes = await right_file.download_as_bytearray()
         left_bytes = await left_file.download_as_bytearray()
 
+        # Проверяем что фото не пустые
+        if not face_bytes or len(face_bytes) < 1000:
+            await update.message.reply_text(
+                "Фото лица не получено, попробуй ещё раз: /analyze"
+            )
+            return ConversationHandler.END
+        if not right_bytes or len(right_bytes) < 1000:
+            await update.message.reply_text(
+                "Фото правой ладони не получено, попробуй ещё раз: /analyze"
+            )
+            return ConversationHandler.END
+        if not left_bytes or len(left_bytes) < 1000:
+            await update.message.reply_text(
+                "Фото левой ладони не получено, попробуй ещё раз: /analyze"
+            )
+            return ConversationHandler.END
+
         # Получаем цели пользователя
         goals = db.get_active_goals(user_id)
 

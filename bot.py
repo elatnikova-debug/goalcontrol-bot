@@ -745,6 +745,7 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
             messages=messages,
             max_tokens=600,
             temperature=0.8,
+            timeout=60,
         )
 
         reply = response.choices[0].message.content
@@ -768,12 +769,12 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     except Exception as e:
-        logger.error("Coach GPT error: %s", e, exc_info=True)
+        logger.error("Coach GPT error: %s: %s", type(e).__name__, e, exc_info=True)
         coach_exit_kb = InlineKeyboardMarkup([
             [InlineKeyboardButton("🏠 Главное меню", callback_data="exit_coach")]
         ])
         await update.message.reply_text(
-            "Что-то пошло не так. Попробуй ещё раз через минуту.",
+            "Что-то пошло не так. Попробуй отправить сообщение ещё раз или зайди чуть позже.",
             reply_markup=coach_exit_kb
         )
 
