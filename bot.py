@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.3.7"
+BOT_VERSION = "2.3.8"
 
 # ========================
 # Админ
@@ -756,7 +756,7 @@ async def handle_coach_message(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     except Exception as e:
-        logger.error(f"Coach GPT error: {e}")
+        logger.error("Coach GPT error: %s", e, exc_info=True)
         await update.message.reply_text(
             "Что-то пошло не так. Попробуй ещё раз через минуту."
         )
@@ -1603,12 +1603,8 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.info("stats_command: user_id=%s, ADMIN_ID=%s, match=%s",
-                user_id, ADMIN_ID, user_id == ADMIN_ID)
-
-    # Если ADMIN_ID не настроен — сообщить
-    if not ADMIN_ID:
-        logger.warning("ADMIN_ID not set (is 0). Set ADMIN_ID env var to your Telegram user_id.")
+    logger.debug("stats_command: user_id=%s, ADMIN_ID=%s, match=%s",
+                 user_id, ADMIN_ID, user_id == ADMIN_ID)
 
     # Если это админ — показываем дашборд бота
     if ADMIN_ID and user_id == ADMIN_ID:
@@ -1979,7 +1975,7 @@ async def menu_button_exits_conversation(update: Update, context: ContextTypes.D
 def build_application(token: str) -> Application:
     from telegram.ext import PicklePersistence
 
-    persistence = PicklePersistence(filepath="bot_data.pickle")
+    persistence = PicklePersistence(filepath="/data/bot_data.pickle")
     app = Application.builder().token(token).persistence(persistence).build()
 
     # Обработчик ошибок

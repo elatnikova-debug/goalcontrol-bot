@@ -8,7 +8,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional  # noqa: F401
 
-DB_PATH = os.getenv("DB_PATH", "coach_bot.db")
+DB_PATH = os.getenv("DB_PATH", "/data/coach_bot.db")
 
 
 def get_connection():
