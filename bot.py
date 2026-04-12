@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.4.4"
+BOT_VERSION = "2.4.6"
 
 # ========================
 # Админ
@@ -174,6 +174,12 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await personal_analysis_menu(update, context)
     elif text == "💎 PRO-доступ":
         await show_pro_menu(update, context)
+    elif text == "🔄 Сделать новый анализ":
+        # Перенаправляем на /analyze — он сам решит что делать
+        await update.message.reply_text(
+            "🔮 Запусти /analyze чтобы начать новый анализ.",
+            reply_markup=get_main_keyboard()
+        )
     elif text == "🏠 Главное меню":
         await update.message.reply_text(
             "Главное меню 👇",
@@ -546,7 +552,10 @@ async def show_paid_analysis_callback(update: Update, context: ContextTypes.DEFA
     chat_id = query.message.chat.id
     for i in range(0, len(result), 4000):
         chunk = result[i:i + 4000]
-        await context.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=chunk, parse_mode="Markdown")
+        except Exception:
+            await context.bot.send_message(chat_id=chat_id, text=chunk)
 
 
 # ========================
@@ -1212,6 +1221,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "show_paid_analysis":
         await show_paid_analysis_callback(update, context)
+
+    elif data == "show_analysis":
+        # Показать анализ (из /analyze меню)
+        await show_paid_analysis_callback(update, context)
+
+    elif data == "redo_analysis":
+        await query.edit_message_text(
+            "🔮 Для нового разбора используй команду /analyze"
+        )
 
     elif data in ("exit_coach", "menu_main"):
         context.user_data.pop("coach_mode", None)
@@ -2098,7 +2116,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Обработчик кнопок меню внутри ConversationHandler
 # ========================
 
-MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🔮 Персональный разбор|💎 PRO-доступ|🏠 Главное меню)$"
+MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🔮 Персональный разбор|💎 PRO-доступ|🔄 Сделать новый анализ|🏠 Главное меню)$"
 
 
 async def menu_button_exits_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:

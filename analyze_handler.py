@@ -17,6 +17,7 @@ from telegram.ext import (
 
 import database as db
 import analyzer as ai
+from analyzer import GPTRefusalError
 
 logger = logging.getLogger(__name__)
 
@@ -77,7 +78,7 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✨ У тебя уже есть анализ личности!\n\nЧто хочешь сделать?",
             reply_markup=keyboard
         )
-        return ConversationHandler.END
+        return ASK_CONSENT
 
     # Начать сбор данных
     await _ask_consent(update, context)
@@ -386,18 +387,31 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             has_analysis=1,
         )
 
-        # Отправляем результат (разбиваем если длинный)
+        # Отправляем результат сразу пользователю
         logger.info("Sending analysis result to user %s (%d chars)", user_id, len(result))
         await _send_long_message(update, result)
 
-        # Финальное сообщение
+        # Кнопки после анализа
+        from telegram import ReplyKeyboardMarkup, KeyboardButton
+        after_kb = ReplyKeyboardMarkup(
+            [
+                [KeyboardButton("🔄 Сделать новый анализ")],
+                [KeyboardButton("🏠 Главное меню")],
+            ],
+            resize_keyboard=True,
+        )
         await update.message.reply_text(
             "✨ *Анализ сохранён в твоём профиле!*\n\n"
-            "Теперь я буду учитывать твой психотип при каждом совете.\n\n"
-            "📌 Посмотреть анализ снова: /analyze\n"
-            "🎯 Получить совет по конкретной цели: /goals → выбери цель\n"
-            "⚙️ Настройки напоминаний: /settings",
-            parse_mode="Markdown"
+            "Теперь я буду учитывать твой психотип при каждом совете.",
+            parse_mode="Markdown",
+            reply_markup=after_kb,
+        )
+
+    except GPTRefusalError:
+        logger.warning("GPT refused analysis for user %s — NOT saving to DB", user_id)
+        await update.message.reply_text(
+            "⚠️ Анализ временно недоступен. Пожалуйста, попробуй позже.\n\n"
+            "Напиши /analyze чтобы начать заново."
         )
 
     except ValueError as e:
@@ -469,6 +483,18 @@ async def show_analysis_callback(update: Update, context: ContextTypes.DEFAULT_T
         profile["analysis_result"]
     )
 
+    # Кнопки после показа
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Сделать новый анализ", callback_data="redo_analysis")],
+        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+    ])
+    await context.bot.send_message(
+        chat_id=query.message.chat.id,
+        text="Что хочешь сделать дальше?",
+        reply_markup=keyboard,
+    )
+    return ConversationHandler.END
+
 
 async def redo_analysis_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Начать анализ заново."""
@@ -476,6 +502,14 @@ async def redo_analysis_callback(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     await _ask_consent(update, context)
     return ASK_CONSENT
+
+
+async def _menu_main_from_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Inline-кнопка 🏠 Главное меню внутри /analyze — выходим."""
+    query = update.callback_query
+    await query.answer()
+    await query.edit_message_reply_markup(reply_markup=None)
+    return ConversationHandler.END
 
 
 async def cancel_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -518,6 +552,7 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
                 CallbackQueryHandler(consent_callback, pattern="^consent_"),
                 CallbackQueryHandler(show_analysis_callback, pattern="^show_analysis$"),
                 CallbackQueryHandler(redo_analysis_callback, pattern="^redo_analysis$"),
+                CallbackQueryHandler(_menu_main_from_analyze, pattern="^menu_main$"),
             ],
             ASK_NAME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)
@@ -546,4 +581,5 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
         allow_reentry=True,
         name="analyze_conv",
         persistent=True,
+        conversation_timeout=600,
     )

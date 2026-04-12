@@ -28,7 +28,6 @@ def init_db():
             first_name TEXT,
             created_at TEXT DEFAULT (datetime('now')),
             timezone_offset INTEGER DEFAULT 3,
-            trial_started_at TEXT,
             subscription_active INTEGER DEFAULT 0,
             subscription_expires_at TEXT
         );
