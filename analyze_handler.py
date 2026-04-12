@@ -80,6 +80,20 @@ async def analyze_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return ASK_CONSENT
 
+    # Проверка оплаты: подписка (любая) или разовая оплата разбора
+    has_subscription = db.get_user_tier(user_id) != "free"
+    has_paid = db.get_has_analysis(user_id)
+
+    if not has_subscription and not has_paid:
+        # FREE-пользователь без оплаты — направляем в меню оплаты
+        await update.message.reply_text(
+            "🔮 Для персонального разбора нужна оплата или подписка."
+            + chr(10)
+            + "Нажми кнопку *🔮 Персональный разбор* в меню для оформления.",
+            parse_mode="Markdown"
+        )
+        return ConversationHandler.END
+
     # Начать сбор данных
     await _ask_consent(update, context)
     return ASK_CONSENT

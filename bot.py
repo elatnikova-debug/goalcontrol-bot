@@ -176,11 +176,22 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
     elif text == "💎 PRO-доступ":
         await show_pro_menu(update, context)
     elif text == "🔄 Сделать новый анализ":
-        # Перенаправляем на /analyze — он сам решит что делать
-        await update.message.reply_text(
-            "🔮 Запусти /analyze чтобы начать новый анализ.",
-            reply_markup=get_main_keyboard()
-        )
+        # Проверяем доступ: подписка или оплаченный разбор
+        has_subscription = db.get_user_tier(user_id) != "free"
+        has_paid = db.get_has_analysis(user_id)
+        if has_subscription or has_paid:
+            await update.message.reply_text(
+                "🔮 Запусти /analyze чтобы начать новый анализ.",
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            await update.message.reply_text(
+                "🔮 Для разбора нужна оплата или подписка."
+                + chr(10)
+                + "Нажми *🔮 Персональный разбор* в меню.",
+                parse_mode="Markdown",
+                reply_markup=get_main_keyboard()
+            )
     elif text == "🏠 Главное меню":
         await update.message.reply_text(
             "Главное меню 👇",
@@ -417,23 +428,19 @@ async def send_motivation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ========================
 
 ANALYSIS_MARKETING_TEXT = (
-    "🔮 *Персональный разбор — твой уникальный код*"
+    "🔮 *Персональный разбор — глубокий анализ твоей личности:*"
     + chr(10) + chr(10)
-    + "Это не гороскоп из интернета. Это глубокий анализ именно тебя:"
+    + "• Персональный профиль по дате рождения"
+    + chr(10)
+    + "• Интерпретация визуальных паттернов"
+    + chr(10)
+    + "• Числовой профиль личности"
+    + chr(10)
+    + "• Психологический портрет"
     + chr(10) + chr(10)
-    + "✨ Астрология — твои сильные планеты и периоды роста"
+    + "Разовый платёж: $10 (500 Stars). Результат сохраняется навсегда."
     + chr(10)
-    + "🤲 Хиромантия — линии судьбы и таланты на ладонях"
-    + chr(10)
-    + "🧠 Нумерология — твой жизненный путь и предназначение"
-    + chr(10)
-    + "👁 Психотип по лицу — как ты принимаешь решения"
-    + chr(10) + chr(10)
-    + "Результат: персональный отчёт на 2000+ слов, который остаётся с тобой навсегда."
-    + chr(10) + chr(10)
-    + "💎 Разовая оплата — 500 Stars (~$10)"
-    + chr(10)
-    + "После оплаты результаты сохраняются и доступны в любое время."
+    + "При оформлении подписки — уже включён."
 )
 
 
@@ -441,7 +448,7 @@ async def personal_analysis_menu(update: Update, context: ContextTypes.DEFAULT_T
     """Персональный разбор — платный одноразовый анализ."""
     user_id = update.effective_user.id
 
-    # Если уже есть оплаченный анализ — показать результат
+    # Если уже есть оплаченный анализ — показать результат или предложить начать
     if db.get_has_analysis(user_id):
         profile = db.get_user_profile(user_id)
         if profile and profile.get("analysis_result"):
@@ -450,18 +457,30 @@ async def personal_analysis_menu(update: Update, context: ContextTypes.DEFAULT_T
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("📋 Показать мой разбор", callback_data="show_paid_analysis")],
+                    [InlineKeyboardButton("🔄 Сделать новый анализ", callback_data="redo_analysis")],
                     [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                 ])
             )
             return
+        else:
+            # Оплачено, но анализ ещё не пройден
+            await update.message.reply_text(
+                "🔮 *Разбор уже оплачен!*"
+                + chr(10) + chr(10)
+                + "Запусти /analyze чтобы пройти анализ.",
+                parse_mode="Markdown",
+                reply_markup=get_main_keyboard()
+            )
+            return
 
-    # Если у пользователя PRO/PREMIUM — анализ включён бесплатно
+    # Если у пользователя любая подписка (LITE/PRO/PREMIUM) — анализ включён бесплатно
     tier = db.get_user_tier(user_id)
-    if tier in ("pro", "premium"):
+    if tier in ("lite", "pro", "premium"):
+        tier_label = {"lite": "⭐ LITE", "pro": "💎 PRO", "premium": "👑 PREMIUM"}[tier]
         await update.message.reply_text(
             "🔮 *Персональный разбор*"
             + chr(10) + chr(10)
-            + "У тебя " + ("💎 PRO" if tier == "pro" else "👑 PREMIUM")
+            + "У тебя " + tier_label
             + "-подписка — персональный разбор включён бесплатно!"
             + chr(10) + chr(10)
             + "Нажми кнопку ниже, чтобы начать анализ.",
@@ -499,9 +518,9 @@ async def send_analysis_invoice(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    # Если PRO/PREMIUM — бесплатно
+    # Если любая подписка (LITE/PRO/PREMIUM) — бесплатно
     tier = db.get_user_tier(user_id)
-    if tier in ("pro", "premium"):
+    if tier in ("lite", "pro", "premium"):
         db.set_has_analysis(user_id)
         await query.edit_message_text(
             "✨ Разбор активирован бесплатно по твоей подписке!"
