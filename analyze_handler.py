@@ -29,7 +29,8 @@ logger = logging.getLogger(__name__)
     ASK_BIRTHCITY,
     ASK_BIRTHTIME,
     ANALYZING,
-) = range(6)
+    ASK_FOLLOWUP,
+) = range(7)
 
 TOTAL_STEPS = 4  # шагов с данными (без согласия и анализа)
 
@@ -277,23 +278,60 @@ async def _run_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("Sending analysis result to user %s (%d chars)", user_id, len(result))
         await _send_long_message_to_chat(context.bot, chat_id, result)
 
-        from telegram import ReplyKeyboardMarkup, KeyboardButton
-        after_kb = ReplyKeyboardMarkup(
-            [
-                [KeyboardButton("🔄 Сделать новый анализ")],
-                [KeyboardButton("🏠 Главное меню")],
-            ],
-            resize_keyboard=True,
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="✨ *Анализ сохранён!* Готовлю ТОП-10 сильных и слабых качеств...",
+            parse_mode="Markdown",
         )
+        await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+
+        # === ВТОРОЙ ЗАПРОС GPT: ТОП-10 сильных и слабых качеств ===
+        try:
+            top10_result = await _get_top10_analysis(result)
+            logger.info("Top-10 analysis done for user %s (%d chars)", user_id, len(top10_result))
+            await _send_long_message_to_chat(context.bot, chat_id, top10_result)
+
+            # Дописываем к основному анализу в БД
+            combined = result + "\n\n" + top10_result
+            db.save_user_profile(
+                user_id,
+                analysis_result=combined,
+            )
+            context.user_data["analysis_for_followup"] = combined
+        except Exception as e:
+            logger.error("Top-10 analysis error for user %s: %s", user_id, e, exc_info=True)
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text="⚠️ Не удалось составить ТОП-10 качеств. Основной анализ сохранён.",
+            )
+            context.user_data["analysis_for_followup"] = result
+
+        # Показываем кнопки: вопросы по разбору или главное меню
+        context.user_data["followup_count"] = 0
+        followup_kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "❓ Задать вопрос по разбору",
+                callback_data="ask_followup"
+            )],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+        ])
         await context.bot.send_message(
             chat_id=chat_id,
             text=(
-                "✨ *Анализ сохранён в твоём профиле!*\n\n"
-                "Теперь я буду учитывать твой психотип при каждом совете."
+                "✨ *Анализ завершён и сохранён в твоём профиле!*"
+                + chr(10) + chr(10)
+                + "Ты можешь задать до 5 вопросов по своему разбору."
             ),
             parse_mode="Markdown",
-            reply_markup=after_kb,
+            reply_markup=followup_kb,
         )
+
+        # Очищаем временные данные профиля
+        for key in ["profile_name", "profile_birthdate", "profile_birthcity",
+                    "profile_birthtime"]:
+            context.user_data.pop(key, None)
+
+        return ASK_FOLLOWUP
 
     except GPTRefusalError:
         logger.warning("GPT refused analysis for user %s — NOT saving to DB", user_id)
@@ -348,7 +386,7 @@ async def _run_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         await context.bot.send_message(chat_id=chat_id, text=user_msg)
 
-    # Очищаем временные данные
+    # Очищаем временные данные (при ошибке)
     for key in ["profile_name", "profile_birthdate", "profile_birthcity",
                 "profile_birthtime"]:
         context.user_data.pop(key, None)
@@ -444,6 +482,164 @@ async def _send_long_message_to_chat(bot, chat_id: int, text: str, chunk_size: i
             await bot.send_message(chat_id=chat_id, text=chunk)
 
 
+async def _get_top10_analysis(analysis_result: str) -> str:
+    """Второй GPT-запрос: ТОП-10 сильных и слабых качеств."""
+    client = ai.get_client()
+
+    prompt = (
+        "На основе только что составленного персонального разбора, составь:"
+        + chr(10) + chr(10)
+        + "🏆 ТОП-10 СИЛЬНЫХ КАЧЕСТВ ЛИЧНОСТИ"
+        + chr(10)
+        + "Перечисли 10 самых сильных качеств этого человека, которые помогают "
+        + "в достижении целей. Для каждого качества — краткое пояснение (1-2 "
+        + "предложения) почему это сила и как её использовать."
+        + chr(10) + chr(10)
+        + "⚠️ ТОП-10 КАЧЕСТВ, КОТОРЫЕ МОГУТ МЕШАТЬ"
+        + chr(10)
+        + "Перечисли 10 качеств или паттернов поведения, которые могут мешать "
+        + "в достижении целей. Для каждого — краткое пояснение и конкретная "
+        + "рекомендация как с этим работать."
+        + chr(10) + chr(10)
+        + "Пиши на русском. Конкретно, без воды."
+    )
+
+    response = await client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": "Ты — профессиональный коуч-астролог, "
+             "эксперт по анализу личности. Отвечаешь на русском. Конкретно и по делу."},
+            {"role": "user", "content": "Вот персональный разбор клиента:"
+             + chr(10) + chr(10) + analysis_result[:4000]
+             + chr(10) + chr(10) + prompt},
+        ],
+        max_tokens=3000,
+        temperature=0.7,
+    )
+    return response.choices[0].message.content
+
+
+async def followup_entry(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Callback: пользователь нажал 'Задать вопрос по разбору'."""
+    query = update.callback_query
+    await query.answer()
+
+    count = context.user_data.get("followup_count", 0)
+    remaining = 5 - count
+    if remaining <= 0:
+        await query.edit_message_text(
+            "Ты уже задал 5 вопросов. Спасибо за интерес к разбору!"
+            + chr(10) + chr(10)
+            + "Используй /analyze чтобы пройти новый анализ."
+        )
+        return ConversationHandler.END
+
+    await query.edit_message_text(
+        "❓ Задай свой вопрос по разбору (осталось: "
+        + str(remaining) + "):"
+    )
+    return ASK_FOLLOWUP
+
+
+async def handle_followup_question(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка вопроса по анализу личности."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    question = update.message.text.strip()
+
+    count = context.user_data.get("followup_count", 0)
+    if count >= 5:
+        await update.message.reply_text(
+            "Ты уже задал 5 вопросов. Спасибо за интерес к разбору!"
+            + chr(10) + chr(10)
+            + "Используй /analyze чтобы пройти новый анализ.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+            ])
+        )
+        return ConversationHandler.END
+
+    # Получаем анализ из context или из БД
+    analysis = context.user_data.get("analysis_for_followup")
+    if not analysis:
+        profile = db.get_user_profile(user_id)
+        analysis = profile.get("analysis_result", "") if profile else ""
+
+    if not analysis:
+        await update.message.reply_text(
+            "Анализ не найден. Пройди /analyze заново.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+            ])
+        )
+        return ConversationHandler.END
+
+    await update.message.chat.send_action("typing")
+
+    try:
+        client = ai.get_client()
+
+        followup_prompt = (
+            "Ты — персональный коуч-астролог. Вот разбор клиента:"
+            + chr(10) + chr(10) + analysis[:4000]
+            + chr(10) + chr(10)
+            + "Клиент задаёт вопрос по своему разбору. Ответь подробно и "
+            + "конкретно, опираясь на его персональный профиль."
+            + chr(10) + chr(10)
+            + "Вопрос: " + question
+        )
+
+        response = await client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": "Ты — персональный коуч-астролог. "
+                 "Отвечаешь на русском. Конкретно, по делу, опираясь на профиль клиента."},
+                {"role": "user", "content": followup_prompt},
+            ],
+            max_tokens=1000,
+            temperature=0.7,
+        )
+
+        answer = response.choices[0].message.content
+        context.user_data["followup_count"] = count + 1
+        remaining = 5 - (count + 1)
+
+        await _send_long_message_to_chat(update.message.bot, chat_id, answer)
+
+        if remaining > 0:
+            followup_kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton(
+                    "❓ Ещё вопрос (осталось: " + str(remaining) + ")",
+                    callback_data="ask_followup"
+                )],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+            ])
+            await update.message.reply_text(
+                "Осталось вопросов: " + str(remaining),
+                reply_markup=followup_kb,
+            )
+            return ASK_FOLLOWUP
+        else:
+            await update.message.reply_text(
+                "Ты задал все 5 вопросов. Спасибо за интерес к разбору! 🌟",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+                ])
+            )
+            return ConversationHandler.END
+
+    except Exception as e:
+        logger.error("Followup GPT error for user %s: %s", user_id, e, exc_info=True)
+        await update.message.reply_text(
+            "Ошибка при обработке вопроса. Попробуй ещё раз.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("❓ Попробовать снова", callback_data="ask_followup")],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+            ])
+        )
+        return ASK_FOLLOWUP
+
+
 def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
     """Собрать и вернуть ConversationHandler для /analyze."""
     fallbacks = [CommandHandler("cancel", cancel_analyze)]
@@ -471,6 +667,11 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
             ASK_BIRTHTIME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthtime),
                 CallbackQueryHandler(skip_birthtime_callback, pattern="^skip_birthtime$"),
+            ],
+            ASK_FOLLOWUP: [
+                CallbackQueryHandler(followup_entry, pattern="^ask_followup$"),
+                CallbackQueryHandler(_menu_main_from_analyze, pattern="^menu_main$"),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, handle_followup_question),
             ],
         },
         fallbacks=fallbacks,

@@ -60,6 +60,9 @@ ANALYSIS_PRICE_STARS = int(os.getenv("ANALYSIS_PRICE_STARS", "500"))  # 500 Star
 # Состояния анкеты коуча
 (CQ_BUSINESS_AREA, CQ_EXPERIENCE, CQ_CHALLENGE, CQ_TEAM_SIZE, CQ_REVENUE) = range(200, 205)
 
+# Состояния для редактирования (add step, rename step, edit deadline)
+(EDIT_WAITING_TEXT,) = range(300, 301)
+
 creating_goals = {}
 
 # Хранилище данных анкеты (по user_id)
@@ -988,11 +991,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("add_step_"):
-        goal_id = int(data.split("_")[2])
-        context.user_data["edit_add_goal_id"] = goal_id
-        await query.edit_message_text(
-            "Напиши название нового этапа:"
-        )
+        # Handled by edit_conv ConversationHandler
         return
 
     if data.startswith("del_step_"):
@@ -1048,21 +1047,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data.startswith("ed_rename_"):
-        ms_id = int(data.split("_")[2])
-        ms = db.get_milestone(ms_id)
-        if not ms:
-            logger.warning("Rename: milestone not found: ms_id=%s, user_id=%s", ms_id, user_id)
-            await query.edit_message_text(
-                "Этап не найден. Возможно, он был удалён.\n\n"
-                "Нажми 🎯 Мои цели и проекты в меню."
-            )
-            return
-        context.user_data["edit_rename_ms_id"] = ms_id
-        context.user_data["edit_rename_goal_id"] = ms["goal_id"]
-        await query.edit_message_text(
-            f"Текущее название: *{ms['title']}*\n\nНапиши новое название этапа:",
-            parse_mode="Markdown"
-        )
+        # Handled by edit_conv ConversationHandler
         return
 
     elif data.startswith("ed_del_ms_"):
@@ -1089,21 +1074,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
     elif data.startswith("ed_add_"):
-        goal_id = int(data.split("_")[2])
-        context.user_data["edit_add_goal_id"] = goal_id
-        await query.edit_message_text(
-            "Напиши название нового этапа:"
-        )
+        # Handled by edit_conv ConversationHandler
+        pass
 
     elif data.startswith("ed_deadline_"):
-        goal_id = int(data.split("_")[2])
-        goal = db.get_goal(goal_id)
-        context.user_data["edit_deadline_goal_id"] = goal_id
-        await query.edit_message_text(
-            f"Текущий дедлайн: *{goal['deadline'] if goal else '—'}*\n\n"
-            "Напиши новый дедлайн в формате ДД.ММ.ГГГГ:",
-            parse_mode="Markdown"
-        )
+        # Handled by edit_conv ConversationHandler
+        pass
 
     # --- Навигация по целям ---
     elif data == "new_goal":
@@ -2074,13 +2050,93 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ========================
-# Обработка свободного текста
+# ConversationHandler: редактирование этапов (add/rename/deadline)
 # ========================
 
-async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Маршрутизация: коуч-режим, редактирование или помощь."""
-    # Проверяем ожидание ввода для редактирования
-    user_id = update.effective_user.id
+async def edit_add_step_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point: callback add_step_ or ed_add_ — ask for step name."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+    if data.startswith("add_step_"):
+        goal_id = int(data.split("_")[2])
+    else:
+        goal_id = int(data.split("_")[2])
+    context.user_data["edit_add_goal_id"] = goal_id
+    await query.edit_message_text("Напиши название нового этапа:")
+    return EDIT_WAITING_TEXT
+
+
+async def edit_rename_step_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point: callback ed_rename_ — ask for new step name."""
+    query = update.callback_query
+    await query.answer()
+    ms_id = int(query.data.split("_")[2])
+    ms = db.get_milestone(ms_id)
+    if not ms:
+        await query.edit_message_text(
+            "Этап не найден. Возможно, он был удалён."
+            + chr(10) + chr(10)
+            + "Нажми 🎯 Мои цели и проекты в меню."
+        )
+        return ConversationHandler.END
+    context.user_data["edit_rename_ms_id"] = ms_id
+    context.user_data["edit_rename_goal_id"] = ms["goal_id"]
+    await query.edit_message_text(
+        "Текущее название: *" + ms["title"] + "*"
+        + chr(10) + chr(10) + "Напиши новое название этапа:",
+        parse_mode="Markdown"
+    )
+    return EDIT_WAITING_TEXT
+
+
+async def edit_deadline_entry(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Entry point: callback ed_deadline_ — ask for new deadline."""
+    query = update.callback_query
+    await query.answer()
+    goal_id = int(query.data.split("_")[2])
+    goal = db.get_goal(goal_id)
+    context.user_data["edit_deadline_goal_id"] = goal_id
+    deadline_display = goal["deadline"] if goal else "—"
+    await query.edit_message_text(
+        "Текущий дедлайн: *" + deadline_display + "*"
+        + chr(10) + chr(10)
+        + "Напиши новый дедлайн в формате ДД.ММ.ГГГГ:",
+        parse_mode="Markdown"
+    )
+    return EDIT_WAITING_TEXT
+
+
+async def _show_goal_after_edit(update: Update, goal_id: int):
+    """Helper: show updated goal after edit operation."""
+    goal = db.get_goal(goal_id)
+    if goal:
+        milestones = db.get_milestones(goal_id)
+        done = sum(1 for m in milestones if m["status"] == "completed")
+        total = len(milestones)
+        bar = mot.format_progress_bar(done, total)
+        ms_text = ""
+        for m in milestones:
+            icon = "✅" if m["status"] == "completed" else "⬜"
+            ms_text += icon + " " + m["title"] + "\n"
+        goal_title = goal["title"]
+        await update.message.reply_text(
+            "🎯 *" + goal_title + "*"
+            + chr(10) + chr(10)
+            + "Прогресс: " + bar
+            + chr(10) + chr(10)
+            + "*Этапы:*" + chr(10) + ms_text,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✏️ Редактировать", callback_data="edit_" + str(goal_id))],
+                [InlineKeyboardButton("◀️ К цели", callback_data="goal_" + str(goal_id))],
+                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
+            ])
+        )
+
+
+async def edit_waiting_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """State handler: receive text for add/rename/deadline edit."""
     text = update.message.text
 
     # Переименование этапа
@@ -2090,75 +2146,52 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         db.rename_milestone(ms_id, text.strip())
         await update.message.reply_text("✅ Этап переименован!")
         if goal_id:
-            # Отправляем обновлённый вид цели
-            goal = db.get_goal(goal_id)
-            if goal:
-                milestones = db.get_milestones(goal_id)
-                done = sum(1 for m in milestones if m["status"] == "completed")
-                total = len(milestones)
-                bar = mot.format_progress_bar(done, total)
-                ms_text = ""
-                for m in milestones:
-                    icon = "✅" if m["status"] == "completed" else "⬜"
-                    ms_text += f"{icon} {m['title']}\n"
-                await update.message.reply_text(
-                    f"🎯 *{goal['title']}*\n\nПрогресс: {bar}\n\n*Этапы:*\n{ms_text}",
-                    parse_mode="Markdown",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
-                        [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
-                        [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
-                    ])
-                )
-        return
+            await _show_goal_after_edit(update, goal_id)
+        return ConversationHandler.END
 
     # Добавление этапа
     if "edit_add_goal_id" in context.user_data:
         goal_id = context.user_data.pop("edit_add_goal_id")
         db.add_milestone_to_goal(goal_id, text.strip())
         await update.message.reply_text("✅ Этап добавлен!")
-        goal = db.get_goal(goal_id)
-        if goal:
-            milestones = db.get_milestones(goal_id)
-            done = sum(1 for m in milestones if m["status"] == "completed")
-            total = len(milestones)
-            bar = mot.format_progress_bar(done, total)
-            ms_text = ""
-            for m in milestones:
-                icon = "✅" if m["status"] == "completed" else "⬜"
-                ms_text += f"{icon} {m['title']}\n"
-            await update.message.reply_text(
-                f"🎯 *{goal['title']}*\n\nПрогресс: {bar}\n\n*Этапы:*\n{ms_text}",
-                parse_mode="Markdown",
-                reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
-                    [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
-                    [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
-                ])
-            )
-        return
+        await _show_goal_after_edit(update, goal_id)
+        return ConversationHandler.END
 
     # Изменение дедлайна
     if "edit_deadline_goal_id" in context.user_data:
-        goal_id = context.user_data.pop("edit_deadline_goal_id")
+        goal_id = context.user_data["edit_deadline_goal_id"]
         try:
             dl = datetime.strptime(text.strip(), "%d.%m.%Y").date()
             if dl <= datetime.now().date():
-                await update.message.reply_text("Дедлайн должен быть в будущем. Попробуй ещё раз (ДД.ММ.ГГГГ):")
-                context.user_data["edit_deadline_goal_id"] = goal_id
-                return
+                await update.message.reply_text(
+                    "Дедлайн должен быть в будущем. Попробуй ещё раз (ДД.ММ.ГГГГ):"
+                )
+                return EDIT_WAITING_TEXT
+            context.user_data.pop("edit_deadline_goal_id")
             db.update_goal_deadline(goal_id, dl.strftime("%Y-%m-%d"))
             await update.message.reply_text(
-                f"✅ Дедлайн изменён на {dl.strftime('%d.%m.%Y')}",
+                "✅ Дедлайн изменён на " + dl.strftime("%d.%m.%Y"),
                 reply_markup=InlineKeyboardMarkup([
-                    [InlineKeyboardButton("◀️ К цели", callback_data=f"goal_{goal_id}")],
+                    [InlineKeyboardButton("◀️ К цели", callback_data="goal_" + str(goal_id))],
                     [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
                 ])
             )
         except ValueError:
             await update.message.reply_text("Неверный формат. Используй ДД.ММ.ГГГГ:")
-            context.user_data["edit_deadline_goal_id"] = goal_id
-        return
+            return EDIT_WAITING_TEXT
+        return ConversationHandler.END
+
+    # Не знаем что ждали — выходим
+    return ConversationHandler.END
+
+
+# ========================
+# Обработка свободного текста
+# ========================
+
+async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Маршрутизация: коуч-режим или помощь."""
+    text = update.message.text
 
     # Коуч-режим
     if context.user_data.get("coach_mode"):
@@ -2300,6 +2333,25 @@ def build_application(token: str) -> Application:
     # Анализ личности
     analyze_conv = build_analyze_conversation(extra_fallbacks=common_fallbacks)
 
+    # Редактирование этапов/дедлайнов (ConversationHandler с timeout)
+    edit_conv = ConversationHandler(
+        entry_points=[
+            CallbackQueryHandler(edit_add_step_entry, pattern="^add_step_"),
+            CallbackQueryHandler(edit_add_step_entry, pattern="^ed_add_"),
+            CallbackQueryHandler(edit_rename_step_entry, pattern="^ed_rename_"),
+            CallbackQueryHandler(edit_deadline_entry, pattern="^ed_deadline_"),
+        ],
+        states={
+            EDIT_WAITING_TEXT: [
+                MessageHandler(filters.TEXT & ~filters.COMMAND, edit_waiting_text),
+            ],
+        },
+        fallbacks=common_fallbacks,
+        allow_reentry=True,
+        name="edit_conv",
+        persistent=True,
+        conversation_timeout=120,
+    )
 
     # === Порядок важен! ===
     # 1. Команды (они должны работать всегда, даже вне диалогов)
@@ -2312,6 +2364,7 @@ def build_application(token: str) -> Application:
     app.add_handler(coach_quest_conv)   # Анкета коуча — ДО menu handler
     app.add_handler(goal_conv)
     app.add_handler(analyze_conv)
+    app.add_handler(edit_conv)          # Редактирование этапов — ДО callback_handler
 
     # 3. Кнопки главного меню
     app.add_handler(MessageHandler(
