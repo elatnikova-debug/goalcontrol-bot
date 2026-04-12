@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.4.8"
+BOT_VERSION = "2.5.1"
 
 # ========================
 # Админ
