@@ -340,60 +340,16 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info("Starting analysis pipeline for user %s", user_id)
 
     try:
-        # Скачиваем фотографии (каждую отдельно с обработкой ошибок)
-        logger.info("Fetching photos for user %s", user_id)
-        photo_ids = {
-            "face": context.user_data["face_file_id"],
-            "right_palm": context.user_data["right_palm_file_id"],
-            "left_palm": context.user_data["left_palm_file_id"],
-        }
-        photo_labels = {
-            "face": "лица",
-            "right_palm": "правой ладони",
-            "left_palm": "левой ладони",
-        }
-        photo_bytes = {}
-        for key, file_id in photo_ids.items():
-            try:
-                f = await context.bot.get_file(file_id, read_timeout=30, connect_timeout=15)
-                data = await f.download_as_bytearray()
-                if not data or len(data) < 1000:
-                    await update.message.reply_text(
-                        "Фото " + photo_labels[key] + " не получено. Попробуй ещё раз: /analyze"
-                    )
-                    return ConversationHandler.END
-                photo_bytes[key] = bytes(data)
-            except Exception as e:
-                logger.error(
-                    "Failed to download %s photo for user %s: %s: %s",
-                    key, user_id, type(e).__name__, e, exc_info=True,
-                )
-                await update.message.reply_text(
-                    "Не удалось скачать фото " + photo_labels[key]
-                    + ". Попробуй ещё раз: /analyze"
-                )
-                return ConversationHandler.END
-
-        logger.info(
-            "Photos downloaded for user %s: face=%dB, right=%dB, left=%dB",
-            user_id, len(photo_bytes["face"]),
-            len(photo_bytes["right_palm"]),
-            len(photo_bytes["left_palm"]),
-        )
-
         # Получаем цели пользователя
         goals = db.get_active_goals(user_id)
 
-        # Запускаем AI анализ
-        logger.info("Calling GPT-4o analyze_personality for user %s", user_id)
+        # Запускаем AI анализ (только текстовые данные, фото НЕ отправляются в GPT)
+        logger.info("Calling GPT-4o analyze_personality (text-only) for user %s", user_id)
         result = await ai.analyze_personality(
             full_name=context.user_data["profile_name"],
             birth_date=context.user_data["profile_birthdate"],
             birth_city=context.user_data["profile_birthcity"],
             birth_time=context.user_data.get("profile_birthtime"),
-            face_photo_bytes=photo_bytes["face"],
-            right_palm_bytes=photo_bytes["right_palm"],
-            left_palm_bytes=photo_bytes["left_palm"],
             goals=goals,
         )
 
