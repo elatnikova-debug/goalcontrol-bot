@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.5.1"
+BOT_VERSION = "2.5.2"
 
 # ========================
 # Админ
@@ -430,13 +430,13 @@ async def send_motivation(update: Update, context: ContextTypes.DEFAULT_TYPE):
 ANALYSIS_MARKETING_TEXT = (
     "🔮 *Персональный разбор — глубокий анализ твоей личности:*"
     + chr(10) + chr(10)
-    + "• Персональный профиль по дате рождения"
+    + "• Астрологический профиль (натальная карта)"
     + chr(10)
-    + "• Интерпретация визуальных паттернов"
-    + chr(10)
-    + "• Числовой профиль личности"
+    + "• Нумерологический профиль"
     + chr(10)
     + "• Психологический портрет"
+    + chr(10)
+    + "• Рекомендации по карьере и развитию"
     + chr(10) + chr(10)
     + "Разовый платёж: $10 (500 Stars). Результат сохраняется навсегда."
     + chr(10)
@@ -533,7 +533,7 @@ async def send_analysis_invoice(update: Update, context: ContextTypes.DEFAULT_TY
         await context.bot.send_invoice(
             chat_id=user_id,
             title="🔮 Персональный разбор",
-            description="Глубокий анализ: астрология + хиромантия + нумерология + психотип. Навсегда.",
+            description="Астрология + Нумерология + Психологический портрет. Навсегда.",
             payload="personal_analysis",
             currency="XTR",
             prices=[LabeledPrice(label="Персональный разбор", amount=ANALYSIS_PRICE_STARS)],

@@ -1,6 +1,6 @@
 """
 ConversationHandler для команды /analyze.
-Последовательно собирает данные: ФИО → дата рождения → город → время → фото лица → правая ладонь → левая ладонь.
+Последовательно собирает данные: ФИО → дата рождения → город → время.
 Затем отправляет всё в GPT-4o и возвращает анализ личности.
 """
 
@@ -28,22 +28,16 @@ logger = logging.getLogger(__name__)
     ASK_BIRTHDATE,
     ASK_BIRTHCITY,
     ASK_BIRTHTIME,
-    ASK_FACE_PHOTO,
-    ASK_RIGHT_PALM,
-    ASK_LEFT_PALM,
     ANALYZING,
-) = range(9)
+) = range(6)
 
-TOTAL_STEPS = 7  # шагов с данными (без согласия и анализа)
+TOTAL_STEPS = 4  # шагов с данными (без согласия и анализа)
 
 STEP_LABELS = [
     "ФИО",
     "Дата рождения",
     "Город рождения",
     "Время рождения",
-    "Фото лица",
-    "Правая ладонь",
-    "Левая ладонь",
 ]
 
 
@@ -106,16 +100,12 @@ async def _ask_consent(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
     ])
     text = (
-        "🌟 *Могу открыть твою личность по некоторым данным...*\n\n"
-        "Я проведу глубокий анализ, объединяя:\n"
-        "🔮 Астрологию • ✋ Хиромантию • 👤 Физиономику\n"
-        "🔢 Нумерологию • 🧠 Психологию • 🏆 Коучинг\n\n"
-        "На основе анализа дам персонализированную стратегию достижения *именно твоих целей*.\n\n"
-        "Для анализа понадобится:\n"
-        "• ФИО, дата и время рождения, город\n"
-        "• Фото лица (без очков)\n"
-        "• Фото ладоней (правой и левой, линии чтобы были видны)\n\n"
-        "Готова?"
+        "🔮 *Персональный разбор — глубокий анализ твоей личности:*\n"
+        "• Астрологический профиль (натальная карта)\n"
+        "• Нумерологический профиль\n"
+        "• Психологический портрет\n"
+        "• Рекомендации по карьере и развитию\n\n"
+        "Мне понадобятся 4 данных о тебе. Начнём!"
     )
     if update.callback_query:
         await update.callback_query.edit_message_text(text, parse_mode="Markdown", reply_markup=keyboard)
@@ -213,15 +203,8 @@ async def skip_birthtime_callback(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     await query.answer()
     context.user_data["profile_birthtime"] = None
-    await query.edit_message_text(
-        f"Хорошо, пропустим! 👍\n\n"
-        f"{_progress(5)}\n\n"
-        "📸 *Шаг 5: Фото лица*\n\n"
-        "Пришли чёткое фото лица *без очков* и головных уборов.\n"
-        "Лицо должно быть хорошо освещено и смотреть прямо в камеру.",
-        parse_mode="Markdown"
-    )
-    return ASK_FACE_PHOTO
+    await query.edit_message_text("Хорошо, пропустим! 👍")
+    return await _run_analysis(update, context)
 
 
 async def got_birthtime(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -240,110 +223,35 @@ async def got_birthtime(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return ASK_BIRTHTIME
 
     context.user_data["profile_birthtime"] = text
-    await update.message.reply_text(
-        f"Отлично! ⏰\n\n"
-        f"{_progress(5)}\n\n"
-        "📸 *Шаг 5: Фото лица*\n\n"
-        "Пришли чёткое фото лица *без очков* и головных уборов.\n"
-        "Лицо должно быть хорошо освещено и смотреть прямо в камеру.",
-        parse_mode="Markdown"
-    )
-    return ASK_FACE_PHOTO
+    await update.message.reply_text("Отлично! ⏰")
+    return await _run_analysis(update, context)
 
 
-async def got_face_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info("Received photo for step FACE from user %s", user_id)
+async def _run_analysis(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Все данные собраны — запускаем GPT-анализ."""
+    chat_id = update.effective_chat.id
 
-    # Фото как документ (несжатое изображение)
-    if update.message.document:
-        context.user_data["face_file_id"] = update.message.document.file_id
-    elif update.message.photo:
-        # Берём наибольшее разрешение
-        context.user_data["face_file_id"] = update.message.photo[-1].file_id
-    else:
-        await update.message.reply_text(
-            "Пришли именно фотографию (не файл и не стикер) 📸"
-        )
-        return ASK_FACE_PHOTO
-
-    await update.message.reply_text(
-        f"Фото лица получила! 📸✅\n\n"
-        f"{_progress(6)}\n\n"
-        "✋ *Шаг 6: Правая ладонь*\n\n"
-        "Пришли фото правой ладони *внутренней стороной* (линии должны быть хорошо видны).\n"
-        "Хорошее освещение, рука расслаблена и раскрыта.",
-        parse_mode="Markdown"
-    )
-    return ASK_RIGHT_PALM
-
-
-async def got_right_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info("Received photo for step RIGHT_PALM from user %s", user_id)
-
-    if update.message.document:
-        context.user_data["right_palm_file_id"] = update.message.document.file_id
-    elif update.message.photo:
-        context.user_data["right_palm_file_id"] = update.message.photo[-1].file_id
-    else:
-        await update.message.reply_text(
-            "Пришли фотографию правой ладони ✋"
-        )
-        return ASK_RIGHT_PALM
-
-    await update.message.reply_text(
-        f"Правая ладонь — есть! ✅\n\n"
-        f"{_progress(7)}\n\n"
-        "🤚 *Шаг 7: Левая ладонь*\n\n"
-        "Теперь пришли фото *левой* ладони, тоже внутренней стороной.\n"
-        "Это последний шаг — почти готово!",
-        parse_mode="Markdown"
-    )
-    return ASK_LEFT_PALM
-
-
-async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    logger.info("Received photo for step LEFT_PALM from user %s", user_id)
-
-    if update.message.document:
-        context.user_data["left_palm_file_id"] = update.message.document.file_id
-    elif update.message.photo:
-        context.user_data["left_palm_file_id"] = update.message.photo[-1].file_id
-    else:
-        await update.message.reply_text(
-            "Пришли фотографию левой ладони 🤚"
-        )
-        return ASK_LEFT_PALM
-
-    # Все данные собраны — запускаем анализ
-    await update.message.reply_text(
-        "🌟 *Все данные получены!*\n\n"
-        "Начинаю глубокий анализ...\n\n"
-        "🔮 Строю натальную карту...\n"
-        "✋ Изучаю линии ладоней...\n"
-        "👤 Анализирую черты лица...\n"
-        "🔢 Рассчитываю нумерологический код...\n"
-        "🧠 Определяю психотип...\n\n"
-        "Это займёт около 30-60 секунд. Пожалуйста, подожди ✨",
-        parse_mode="Markdown"
+    await context.bot.send_message(
+        chat_id=chat_id,
+        text=(
+            "🌟 *Все данные получены!*\n\n"
+            "Начинаю глубокий анализ...\n\n"
+            "🔮 Строю натальную карту...\n"
+            "🔢 Рассчитываю нумерологический код...\n"
+            "🧠 Определяю психотип...\n\n"
+            "Это займёт около 30-60 секунд. Пожалуйста, подожди ✨"
+        ),
+        parse_mode="Markdown",
     )
 
-    # Показываем индикатор печатания
-    await context.bot.send_chat_action(
-        chat_id=update.effective_chat.id,
-        action="typing"
-    )
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
 
     user_id = update.effective_user.id
     logger.info("Starting analysis pipeline for user %s", user_id)
 
     try:
-        # Получаем цели пользователя
         goals = db.get_active_goals(user_id)
 
-        # Запускаем AI анализ (только текстовые данные, фото НЕ отправляются в GPT)
         logger.info("Calling GPT-4o analyze_personality (text-only) for user %s", user_id)
         result = await ai.analyze_personality(
             full_name=context.user_data["profile_name"],
@@ -353,7 +261,6 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             goals=goals,
         )
 
-        # Сохраняем в профиль
         logger.info("GPT-4o analysis done for user %s, saving to DB", user_id)
         from datetime import datetime
         db.save_user_profile(
@@ -362,19 +269,14 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             birth_date=context.user_data["profile_birthdate"],
             birth_city=context.user_data["profile_birthcity"],
             birth_time=context.user_data.get("profile_birthtime"),
-            face_photo_id=context.user_data["face_file_id"],
-            right_palm_photo_id=context.user_data["right_palm_file_id"],
-            left_palm_photo_id=context.user_data["left_palm_file_id"],
             analysis_result=result,
             analysis_done_at=datetime.utcnow().isoformat(),
             has_analysis=1,
         )
 
-        # Отправляем результат сразу пользователю
         logger.info("Sending analysis result to user %s (%d chars)", user_id, len(result))
-        await _send_long_message(update, result)
+        await _send_long_message_to_chat(context.bot, chat_id, result)
 
-        # Кнопки после анализа
         from telegram import ReplyKeyboardMarkup, KeyboardButton
         after_kb = ReplyKeyboardMarkup(
             [
@@ -383,25 +285,34 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             resize_keyboard=True,
         )
-        await update.message.reply_text(
-            "✨ *Анализ сохранён в твоём профиле!*\n\n"
-            "Теперь я буду учитывать твой психотип при каждом совете.",
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "✨ *Анализ сохранён в твоём профиле!*\n\n"
+                "Теперь я буду учитывать твой психотип при каждом совете."
+            ),
             parse_mode="Markdown",
             reply_markup=after_kb,
         )
 
     except GPTRefusalError:
         logger.warning("GPT refused analysis for user %s — NOT saving to DB", user_id)
-        await update.message.reply_text(
-            "⚠️ Анализ временно недоступен. Пожалуйста, попробуй позже.\n\n"
-            "Напиши /analyze чтобы начать заново."
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "⚠️ Анализ временно недоступен. Пожалуйста, попробуй позже.\n\n"
+                "Напиши /analyze чтобы начать заново."
+            ),
         )
 
     except ValueError as e:
-        # OPENAI_API_KEY не задан
-        await update.message.reply_text(
-            "🔧 Анализ личности временно недоступен. Администратор уже работает над этим.\n\n"
-            "Попробуй снова чуть позже!"
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=(
+                "🔧 Анализ личности временно недоступен. "
+                "Администратор уже работает над этим.\n\n"
+                "Попробуй снова чуть позже!"
+            ),
         )
         logger.error("OpenAI API key missing: %s", e, exc_info=True)
 
@@ -414,7 +325,6 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             exc_info=True,
         )
 
-        # Более понятное сообщение в зависимости от типа ошибки
         if "timeout" in error_msg.lower() or "timed out" in error_msg.lower():
             user_msg = (
                 "Анализ занял слишком много времени. "
@@ -436,11 +346,11 @@ async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "Попробуй снова через минуту.\n"
                 "Если ошибка повторяется — напиши /analyze заново."
             )
-        await update.message.reply_text(user_msg)
+        await context.bot.send_message(chat_id=chat_id, text=user_msg)
 
     # Очищаем временные данные
     for key in ["profile_name", "profile_birthdate", "profile_birthcity",
-                "profile_birthtime", "face_file_id", "right_palm_file_id", "left_palm_file_id"]:
+                "profile_birthtime"]:
         context.user_data.pop(key, None)
 
     return ConversationHandler.END
@@ -561,15 +471,6 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
             ASK_BIRTHTIME: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthtime),
                 CallbackQueryHandler(skip_birthtime_callback, pattern="^skip_birthtime$"),
-            ],
-            ASK_FACE_PHOTO: [
-                MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_face_photo)
-            ],
-            ASK_RIGHT_PALM: [
-                MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_right_palm)
-            ],
-            ASK_LEFT_PALM: [
-                MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_left_palm)
             ],
         },
         fallbacks=fallbacks,
