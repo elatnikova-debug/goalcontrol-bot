@@ -476,11 +476,23 @@ async def show_analysis_callback(update: Update, context: ContextTypes.DEFAULT_T
         )
         return
 
+    result = profile["analysis_result"]
+
+    # Проверяем, не является ли сохранённый результат отказом GPT
+    if ai.is_gpt_refusal(result):
+        db.clear_analysis(user_id)
+        await query.edit_message_text(
+            "Твой предыдущий анализ был некорректным."
+            + chr(10)
+            + "Пройди анализ заново — нажми /analyze"
+        )
+        return ConversationHandler.END
+
     await query.edit_message_text("📋 Загружаю твой анализ...")
     await _send_long_message_to_chat(
         context.bot,
         query.message.chat.id,
-        profile["analysis_result"]
+        result
     )
 
     # Кнопки после показа

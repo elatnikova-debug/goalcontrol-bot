@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.4.6"
+BOT_VERSION = "2.4.7"
 
 # ========================
 # Админ
@@ -29,6 +29,7 @@ from telegram.ext import (
 import database as db
 import motivation as mot
 from analyze_handler import build_analyze_conversation
+from analyzer import is_gpt_refusal
 
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -74,7 +75,7 @@ def get_main_keyboard():
     keyboard = [
         [KeyboardButton("🎯 Мои цели и проекты"), KeyboardButton("⚡ Фокус на сегодня")],
         [KeyboardButton("✅ Отметить прогресс"), KeyboardButton("🔥 Энергия и драйв")],
-        [KeyboardButton("🤖 Коуч"), KeyboardButton("🔮 Персональный разбор")],
+        [KeyboardButton("👩‍🎓 Коуч"), KeyboardButton("🔮 Персональный разбор")],
         [KeyboardButton("💎 PRO-доступ")],
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
@@ -168,7 +169,7 @@ async def handle_menu_button(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await mark_progress_menu(update, context)
     elif text == "🔥 Энергия и драйв":
         await send_motivation(update, context)
-    elif text == "🤖 Коуч":
+    elif text == "👩‍🎓 Коуч":
         await start_coach(update, context)
     elif text == "🔮 Персональный разбор":
         await personal_analysis_menu(update, context)
@@ -547,8 +548,19 @@ async def show_paid_analysis_callback(update: Update, context: ContextTypes.DEFA
         )
         return
 
-    await query.edit_message_text("📋 Загружаю твой разбор...")
     result = profile["analysis_result"]
+
+    # Проверяем, не является ли сохранённый результат отказом GPT
+    if is_gpt_refusal(result):
+        db.clear_analysis(user_id)
+        await query.edit_message_text(
+            "Твой предыдущий разбор был некорректным."
+            + chr(10)
+            + "Пройди анализ заново — нажми /analyze"
+        )
+        return
+
+    await query.edit_message_text("📋 Загружаю твой разбор...")
     chat_id = query.message.chat.id
     for i in range(0, len(result), 4000):
         chunk = result[i:i + 4000]
@@ -559,11 +571,11 @@ async def show_paid_analysis_callback(update: Update, context: ContextTypes.DEFA
 
 
 # ========================
-# 🤖 Коуч — анкета (5 вопросов)
+# 👩‍🎓 Коуч — анкета (5 вопросов)
 # ========================
 
 async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Точка входа: кнопка 🤖 Коуч — проверяем анкету, лимиты, запускаем."""
+    """Точка входа: кнопка 👩‍🎓 Коуч — проверяем анкету, лимиты, запускаем."""
     user_id = update.effective_user.id
     has_paid = db.has_lite_access(user_id)
     remaining = db.FREE_COACH_MESSAGES_PER_DAY - db.get_coach_messages_today(user_id)
@@ -584,7 +596,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not db.has_coach_questionnaire(user_id):
         cq_data_store[user_id] = {}
         await update.message.reply_text(
-            "🤖 *Перед началом — короткая анкета*\n\n"
+            "👩‍🎓 *Перед началом — короткая анкета*\n\n"
             "Чтобы коуч работал максимально эффективно, "
             "мне нужно понять контекст твоего бизнеса.\n"
             "5 вопросов — займёт 1 минуту.\n\n"
@@ -598,7 +610,7 @@ async def start_coach(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Анкета пройдена — открываем коуч
     if has_paid:
         coach_text = (
-            "🤖 *Коуч на связи*\n\n"
+            "👩‍🎓 *Коуч на связи*\n\n"
             "Я твой персональный AI-коуч. Задавай любые вопросы:\n"
             "• Как разблокироваться если застрял\n"
             "• Как расставить приоритеты\n"
@@ -690,7 +702,7 @@ async def cq_revenue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     if has_paid:
         coach_text = (
             "✅ Анкета сохранена! Теперь коуч знает твой контекст.\n\n"
-            "🤖 *Коуч на связи*\n\n"
+            "👩‍🎓 *Коуч на связи*\n\n"
             "👑 У тебя подписка — без ограничений. Что тебя беспокоит прямо сейчас?"
         )
     else:
@@ -1063,7 +1075,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             trigger_3_text = mot.get_milestone_3_trigger()
             trigger_3_buttons = InlineKeyboardMarkup([
                 [InlineKeyboardButton("🔮 Разбор личности", callback_data="start_analyze")],
-                [InlineKeyboardButton("🤖 Поговорить с коучем", callback_data="start_coach_from_trigger")],
+                [InlineKeyboardButton("👩‍🎓 Поговорить с коучем", callback_data="start_coach_from_trigger")],
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
             await query.message.reply_text(
@@ -1245,7 +1257,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         has_paid = db.has_lite_access(user_id)
         if has_paid:
             coach_text = (
-                "🤖 *Коуч на связи*\n\n"
+                "👩‍🎓 *Коуч на связи*\n\n"
                 "👑 У тебя подписка — без ограничений. Что тебя беспокоит прямо сейчас?"
             )
         else:
@@ -1501,7 +1513,7 @@ async def successful_payment_handler(update: Update, context: ContextTypes.DEFAU
         + chr(10) + chr(10)
         + f"Все функции тарифа {label} теперь твои."
         + chr(10) + chr(10)
-        + "Нажми 🤖 Коуч — никаких ограничений.",
+        + "Нажми 👩‍🎓 Коуч — никаких ограничений.",
         parse_mode="Markdown",
         reply_markup=get_main_keyboard()
     )
@@ -1829,7 +1841,7 @@ async def _admin_stats(update: Update):
         "├ PREMIUM ($29): {}".format(s["tier_premium"]),
         "└ Выручка: {} Stars".format(s["total_revenue_stars"]),
         "",
-        "🤖 Коуч",
+        "👩‍🎓 Коуч",
         "├ Прошли анкету: {}".format(s["questionnaire_count"]),
         "└ Сообщений коучу: {}".format(s["total_coach_messages"]),
         "",
@@ -1858,7 +1870,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "⚡ *Фокус на сегодня* — что делать прямо сейчас\n"
         "✅ *Отметить прогресс* — отметить выполненный этап\n"
         "🔥 *Энергия и драйв* — мотивация от лучших мировых лидеров\n"
-        "🤖 *Коуч* — чат с AI-коучем (20 сообщений/день бесплатно)\n"
+        "👩‍🎓 *Коуч* — чат с AI-коучем (20 сообщений/день бесплатно)\n"
         "🔮 *Персональный разбор* — глубокий анализ личности\n"
         "💎 *PRO-доступ* — разблокировать мощные инструменты\n\n"
         "*Команды:*\n"
@@ -2116,7 +2128,7 @@ async def cancel_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE
 # Обработчик кнопок меню внутри ConversationHandler
 # ========================
 
-MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|🤖 Коуч|🔮 Персональный разбор|💎 PRO-доступ|🔄 Сделать новый анализ|🏠 Главное меню)$"
+MENU_BUTTONS_PATTERN = "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс|🔥 Энергия и драйв|👩‍🎓 Коуч|🔮 Персональный разбор|💎 PRO-доступ|🔄 Сделать новый анализ|🏠 Главное меню)$"
 
 
 async def menu_button_exits_conversation(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -2189,7 +2201,7 @@ def build_application(token: str) -> Application:
     # Анкета коуча (BEFORE menu handler!)
     coach_quest_conv = ConversationHandler(
         entry_points=[
-            MessageHandler(filters.TEXT & filters.Regex("^🤖 Коуч$"), start_coach),
+            MessageHandler(filters.TEXT & filters.Regex("^👩‍🎓 Коуч$"), start_coach),
         ],
         states={
             CQ_BUSINESS_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_business_area)],

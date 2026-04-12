@@ -166,6 +166,20 @@ def init_db():
     except sqlite3.OperationalError:
         pass
 
+    # Миграция: очистить сохранённые отказы GPT из analysis_result
+    conn = get_connection()
+    conn.execute(
+        "UPDATE user_profile SET has_analysis = 0, analysis_result = NULL "
+        "WHERE analysis_result LIKE '%не могу помочь%' "
+        "OR analysis_result LIKE '%cannot help%' "
+        "OR analysis_result LIKE '%unable to assist%' "
+        "OR analysis_result LIKE '%не в состоянии помочь%' "
+        "OR analysis_result LIKE '%content policy%' "
+        "OR analysis_result LIKE '%against my guidelines%'"
+    )
+    conn.commit()
+    conn.close()
+
 
 # --- Пользователи ---
 
@@ -671,6 +685,17 @@ def get_has_analysis(user_id: int) -> bool:
     ).fetchone()
     conn.close()
     return bool(row and row["has_analysis"])
+
+
+def clear_analysis(user_id: int):
+    """Обнулить has_analysis и analysis_result для пользователя."""
+    conn = get_connection()
+    conn.execute(
+        "UPDATE user_profile SET has_analysis = 0, analysis_result = NULL WHERE user_id = ?",
+        (user_id,)
+    )
+    conn.commit()
+    conn.close()
 
 
 # --- Настройки пользователя ---
