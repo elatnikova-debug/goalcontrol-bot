@@ -1724,16 +1724,33 @@ async def goal_confirm_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    logger.debug("stats_command: user_id=%s, ADMIN_ID=%s, match=%s",
-                 user_id, ADMIN_ID, user_id == ADMIN_ID)
+    # Читаем ADMIN_ID заново при каждом вызове — на случай если переменная была задана после старта
+    current_admin_id_str = os.getenv("ADMIN_ID", "0").strip()
+    try:
+        current_admin_id = int(current_admin_id_str) if current_admin_id_str else 0
+    except ValueError:
+        current_admin_id = 0
+
+    logger.info("stats_command: user_id=%s, ADMIN_ID_env='%s', current_admin_id=%s, match=%s",
+                user_id, current_admin_id_str, current_admin_id, user_id == current_admin_id)
 
     # Если это админ — показываем дашборд бота
-    if ADMIN_ID and user_id == ADMIN_ID:
+    if current_admin_id and user_id == current_admin_id:
         try:
             await _admin_stats(update)
         except Exception as e:
             logger.error("_admin_stats error: %s", e, exc_info=True)
             await update.message.reply_text(f"❌ Ошибка админ-статистики: {e}")
+        return
+
+    # Диагностика — показываем только если ADMIN_ID не установлен (равен 0)
+    if current_admin_id == 0:
+        await update.message.reply_text(
+            f"⚠️ ADMIN_ID не установлен на сервере.\n"
+            f"Твой ID: `{user_id}`\n\n"
+            f"Добавь на Render: ADMIN_ID = {user_id}",
+            parse_mode="Markdown"
+        )
         return
 
     # Обычный пользователь — личная статистика
