@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.4.7"
+BOT_VERSION = "2.4.8"
 
 # ========================
 # Админ
@@ -270,12 +270,17 @@ async def show_goal_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, g
 
     if milestones:
         text += "*Этапы:*\n"
-        for m in milestones:
+        for i, m in enumerate(milestones, 1):
             icon = "✅" if m["status"] == "completed" else "⬜"
-            text += f"{icon} {m['title']}\n"
+            text += f"{i}. {icon} {m['title']}\n"
 
     buttons = [
         [InlineKeyboardButton("✅ Отметить этап", callback_data=f"done_{goal_id}")],
+        [
+            InlineKeyboardButton("✏️ Редактировать этап", callback_data=f"edit_step_{goal_id}"),
+            InlineKeyboardButton("➕ Добавить этап", callback_data=f"add_step_{goal_id}"),
+        ],
+        [InlineKeyboardButton("🗑 Удалить этап", callback_data=f"del_step_{goal_id}")],
         [InlineKeyboardButton("✏️ Редактировать", callback_data=f"edit_{goal_id}")],
         [InlineKeyboardButton("🏁 Завершить цель", callback_data=f"complete_{goal_id}")],
         [InlineKeyboardButton("❌ Отменить цель", callback_data=f"cancel_{goal_id}")],
@@ -938,8 +943,65 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
 
+    # --- Редактирование этапов (из детали цели) ---
+    if data.startswith("edit_step_"):
+        goal_id = int(data.split("_")[2])
+        milestones = db.get_milestones(goal_id)
+        if not milestones:
+            await query.edit_message_text(
+                "У этой цели нет этапов для редактирования.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("◀️ Назад", callback_data="goal_" + str(goal_id))],
+                ])
+            )
+            return
+        buttons = []
+        for i, m in enumerate(milestones, 1):
+            buttons.append([InlineKeyboardButton(
+                str(i) + ". " + m["title"][:30],
+                callback_data="ed_rename_" + str(m["id"]),
+            )])
+        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="goal_" + str(goal_id))])
+        await query.edit_message_text(
+            "Выбери этап для редактирования:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
+    if data.startswith("add_step_"):
+        goal_id = int(data.split("_")[2])
+        context.user_data["edit_add_goal_id"] = goal_id
+        await query.edit_message_text(
+            "Напиши название нового этапа:"
+        )
+        return
+
+    if data.startswith("del_step_"):
+        goal_id = int(data.split("_")[2])
+        milestones = db.get_milestones(goal_id)
+        if not milestones:
+            await query.edit_message_text(
+                "У этой цели нет этапов для удаления.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("◀️ Назад", callback_data="goal_" + str(goal_id))],
+                ])
+            )
+            return
+        buttons = []
+        for i, m in enumerate(milestones, 1):
+            buttons.append([InlineKeyboardButton(
+                str(i) + ". " + m["title"][:30],
+                callback_data="ed_del_" + str(m["id"]),
+            )])
+        buttons.append([InlineKeyboardButton("◀️ Назад", callback_data="goal_" + str(goal_id))])
+        await query.edit_message_text(
+            "Выбери этап для удаления:",
+            reply_markup=InlineKeyboardMarkup(buttons),
+        )
+        return
+
     # --- Редактирование целей ---
-    if data.startswith("edit_") and not data.startswith("edit_conv"):
+    if data.startswith("edit_") and not data.startswith("edit_conv") and not data.startswith("edit_step"):
         goal_id = int(data.split("_")[1])
         goal = db.get_goal(goal_id)
         if not goal:

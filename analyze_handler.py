@@ -238,15 +238,20 @@ async def got_birthtime(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_face_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
+    user_id = update.effective_user.id
+    logger.info("Received photo for step FACE from user %s", user_id)
+
+    # Фото как документ (несжатое изображение)
+    if update.message.document:
+        context.user_data["face_file_id"] = update.message.document.file_id
+    elif update.message.photo:
+        # Берём наибольшее разрешение
+        context.user_data["face_file_id"] = update.message.photo[-1].file_id
+    else:
         await update.message.reply_text(
             "Пришли именно фотографию (не файл и не стикер) 📸"
         )
         return ASK_FACE_PHOTO
-
-    # Берём наибольшее разрешение
-    photo = update.message.photo[-1]
-    context.user_data["face_file_id"] = photo.file_id
 
     await update.message.reply_text(
         f"Фото лица получила! 📸✅\n\n"
@@ -260,14 +265,18 @@ async def got_face_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_right_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
+    user_id = update.effective_user.id
+    logger.info("Received photo for step RIGHT_PALM from user %s", user_id)
+
+    if update.message.document:
+        context.user_data["right_palm_file_id"] = update.message.document.file_id
+    elif update.message.photo:
+        context.user_data["right_palm_file_id"] = update.message.photo[-1].file_id
+    else:
         await update.message.reply_text(
             "Пришли фотографию правой ладони ✋"
         )
         return ASK_RIGHT_PALM
-
-    photo = update.message.photo[-1]
-    context.user_data["right_palm_file_id"] = photo.file_id
 
     await update.message.reply_text(
         f"Правая ладонь — есть! ✅\n\n"
@@ -281,14 +290,18 @@ async def got_right_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def got_left_palm(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message.photo:
+    user_id = update.effective_user.id
+    logger.info("Received photo for step LEFT_PALM from user %s", user_id)
+
+    if update.message.document:
+        context.user_data["left_palm_file_id"] = update.message.document.file_id
+    elif update.message.photo:
+        context.user_data["left_palm_file_id"] = update.message.photo[-1].file_id
+    else:
         await update.message.reply_text(
             "Пришли фотографию левой ладони 🤚"
         )
         return ASK_LEFT_PALM
-
-    photo = update.message.photo[-1]
-    context.user_data["left_palm_file_id"] = photo.file_id
 
     # Все данные собраны — запускаем анализ
     await update.message.reply_text(
@@ -580,13 +593,13 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
                 CallbackQueryHandler(skip_birthtime_callback, pattern="^skip_birthtime$"),
             ],
             ASK_FACE_PHOTO: [
-                MessageHandler(filters.PHOTO, got_face_photo)
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_face_photo)
             ],
             ASK_RIGHT_PALM: [
-                MessageHandler(filters.PHOTO, got_right_palm)
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_right_palm)
             ],
             ASK_LEFT_PALM: [
-                MessageHandler(filters.PHOTO, got_left_palm)
+                MessageHandler(filters.PHOTO | filters.Document.IMAGE, got_left_palm)
             ],
         },
         fallbacks=fallbacks,
