@@ -261,8 +261,12 @@ async def send_daily_digests(bot):
                 and local_hour == settings.get("morning_hour", 9)
                 and local_minute < 5
             ):
-                goals = db.get_active_goals(user_id)
-                if goals:
+                today_str = datetime.utcnow().date().isoformat()
+                morning_key = f"{user_id}:morning_digest:{today_str}"
+                if morning_key in _sent_today:
+                    pass  # уже отправлено сегодня
+                elif db.get_active_goals(user_id):
+                    goals = db.get_active_goals(user_id)
                     pending = db.get_pending_milestones_for_user(user_id)
                     today = datetime.utcnow().date()
                     today_count = sum(
@@ -290,6 +294,7 @@ async def send_daily_digests(bot):
                         parse_mode="Markdown",
                         reply_markup=morning_kb
                     )
+                    _sent_today[morning_key] = today_str
                     logger.info(f"Morning digest sent to user {user_id}")
 
             # Вечерний дайджест
@@ -298,8 +303,12 @@ async def send_daily_digests(bot):
                 and local_hour == settings.get("evening_hour", 20)
                 and local_minute < 5
             ):
-                goals = db.get_active_goals(user_id)
-                if goals:
+                today_str = datetime.utcnow().date().isoformat()
+                evening_key = f"{user_id}:evening_digest:{today_str}"
+                if evening_key in _sent_today:
+                    pass  # уже отправлено сегодня
+                elif db.get_active_goals(user_id):
+                    goals = db.get_active_goals(user_id)
                     stats = db.get_user_stats(user_id)
                     text = mot.get_evening_check() + "\n\n"
                     if stats["streak"] > 1:
@@ -314,6 +323,7 @@ async def send_daily_digests(bot):
                         parse_mode="Markdown",
                         reply_markup=evening_kb
                     )
+                    _sent_today[evening_key] = today_str
                     logger.info(f"Evening digest sent to user {user_id}")
 
         except Exception as e:
@@ -380,6 +390,13 @@ async def scheduler_loop(bot):
             await check_and_send_reminders(bot)
 
             now = datetime.utcnow()
+
+            # Очистка кеша дедупликации от вчерашних записей (раз в час)
+            if now.minute == 0:
+                today_iso = now.date().isoformat()
+                stale = [k for k, v in _sent_today.items() if v != today_iso]
+                for k in stale:
+                    del _sent_today[k]
 
             # Дедлайн-уведомления — раз в час (в :00)
             if now.minute == 0:
