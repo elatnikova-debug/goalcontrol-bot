@@ -315,22 +315,18 @@ async def show_goal_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, g
 
 async def today_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
+    logger.info(f"/today called by user {user_id}")
     goals = db.get_active_goals(user_id)
 
     if not goals:
         await update.message.reply_text(
-            "⚡ *Фокус на сегодня*\n\nУ тебя нет активных целей. Создай первую — и я помогу держать фокус каждый день!",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("➕ Создать цель", callback_data="new_goal")],
-                [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
-            ])
+            "У тебя пока нет активных целей. Создай первую: /newgoal",
+            reply_markup=get_main_keyboard()
         )
         return
 
-    text = "⚡ *Фокус на сегодня:*\n\n"
+    text = "⚡ *Фокус на сегодня*\n\n"
     today = datetime.now().date()
-    urgent = []
 
     for goal in goals:
         milestones = db.get_milestones(goal["id"])
@@ -338,25 +334,30 @@ async def today_plan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         try:
             dl = datetime.strptime(goal["deadline"], "%Y-%m-%d").date()
+            deadline_str = goal["deadline"]
             days_left = (dl - today).days
         except Exception:
+            deadline_str = "не указан"
             days_left = 999
 
+        title = goal["title"]
+        text += f"🎯 *Цель:* {title}\n"
+        text += f"📅 *Дедлайн:* {deadline_str}"
+        if days_left <= 7:
+            text += f" (осталось {days_left} дн.)"
+        text += "\n"
+
         if pending:
-            next_ms = pending[0]
-            urgency = "🔴" if days_left <= 3 else "🟡" if days_left <= 7 else "🟢"
-            text += f"{urgency} *{goal['title']}*\n"
-            text += f"   → Следующий шаг: {next_ms['title']}\n"
-            text += f"   Осталось: {days_left} дн.\n\n"
-            if days_left <= 7:
-                urgent.append(goal["title"])
+            text += "*Ближайшие шаги:*\n"
+            for step in pending[:2]:
+                step_title = step["title"]
+                text += f"  ⬜ {step_title}\n"
         else:
-            text += f"✅ *{goal['title']}* — все этапы выполнены!\n\n"
+            text += "  ✅ Все этапы выполнены!\n"
 
-    if urgent:
-        text += f"⚠️ *Срочно:* {', '.join(urgent)}\n"
+        text += "\n"
 
-    text += f"\n_{mot.get_morning_motivation()}_"
+    text += "💡 _Совет: Начни с самого маленького шага!_"
 
     await update.message.reply_text(text, parse_mode="Markdown", reply_markup=get_main_keyboard())
 
@@ -2357,6 +2358,7 @@ def build_application(token: str) -> Application:
     # 1. Команды (они должны работать всегда, даже вне диалогов)
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("today", today_plan))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("settings", settings_command))
 
