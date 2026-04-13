@@ -563,11 +563,14 @@ async def handle_followup_question(update: Update, context: ContextTypes.DEFAULT
     analysis = context.user_data.get("analysis_for_followup")
     if not analysis:
         profile = db.get_user_profile(user_id)
-        analysis = profile.get("analysis_result", "") if profile else ""
+        if profile and profile.get("analysis_result"):
+            analysis = profile["analysis_result"]
+            # Кэшируем для следующих вопросов
+            context.user_data["analysis_for_followup"] = analysis
 
     if not analysis:
         await update.message.reply_text(
-            "Анализ не найден. Пройди /analyze заново.",
+            "Разбор не найден. Пройди /analyze заново.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
@@ -579,9 +582,12 @@ async def handle_followup_question(update: Update, context: ContextTypes.DEFAULT
     try:
         client = ai.get_client()
 
+        # Обрезаем анализ до 4000 символов чтобы не превысить контекст
+        analysis_trimmed = analysis[:4000]
+
         followup_prompt = (
             "Ты — персональный коуч-астролог. Вот разбор клиента:"
-            + chr(10) + chr(10) + analysis[:4000]
+            + chr(10) + chr(10) + analysis_trimmed
             + chr(10) + chr(10)
             + "Клиент задаёт вопрос по своему разбору. Ответь подробно и "
             + "конкретно, опираясь на его персональный профиль."
@@ -601,10 +607,14 @@ async def handle_followup_question(update: Update, context: ContextTypes.DEFAULT
         )
 
         answer = response.choices[0].message.content
-        context.user_data["followup_count"] = count + 1
-        remaining = 5 - (count + 1)
+        if not answer:
+            raise ValueError("GPT returned empty response")
 
         await _send_long_message_to_chat(update.message.bot, chat_id, answer)
+
+        # Увеличиваем счётчик ТОЛЬКО после успешной отправки ответа
+        context.user_data["followup_count"] = count + 1
+        remaining = 5 - (count + 1)
 
         if remaining > 0:
             followup_kb = InlineKeyboardMarkup([
@@ -629,11 +639,21 @@ async def handle_followup_question(update: Update, context: ContextTypes.DEFAULT
             return ConversationHandler.END
 
     except Exception as e:
-        logger.error("Followup GPT error for user %s: %s", user_id, e, exc_info=True)
+        logger.error(
+            "Followup question error for user %s: %s: %s",
+            user_id, type(e).__name__, str(e),
+            exc_info=True,
+        )
+        remaining = 5 - count
         await update.message.reply_text(
-            "Ошибка при обработке вопроса. Попробуй ещё раз.",
+            "Ошибка при обработке вопроса. Попробуй ещё раз."
+            + chr(10)
+            + "(Вопрос не засчитан, осталось: " + str(remaining) + ")",
             reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("❓ Попробовать снова", callback_data="ask_followup")],
+                [InlineKeyboardButton(
+                    "❓ Попробовать снова (осталось: " + str(remaining) + ")",
+                    callback_data="ask_followup"
+                )],
                 [InlineKeyboardButton("🏠 Главное меню", callback_data="menu_main")],
             ])
         )
