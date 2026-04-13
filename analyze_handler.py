@@ -21,6 +21,13 @@ from analyzer import GPTRefusalError
 
 logger = logging.getLogger(__name__)
 
+# Паттерн кнопок главного меню — для перехвата внутри состояний
+MENU_BUTTONS_PATTERN = (
+    "^(🎯 Мои цели и проекты|⚡ Фокус на сегодня|✅ Отметить прогресс"
+    "|🔥 Энергия и драйв|👩‍🎓 Коуч|🔮 Персональный разбор"
+    "|💎 PRO-доступ|🏠 Главное меню)$"
+)
+
 # Состояния диалога
 (
     ASK_CONSENT,
@@ -462,6 +469,20 @@ async def cancel_analyze(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return ConversationHandler.END
 
 
+async def _menu_button_exits(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Кнопка главного меню нажата внутри analyze — очищаем данные и выходим.
+
+    Возвращаем END; кнопка будет обработана menu handler'ом в bot.py,
+    т.к. после END текст попадёт в общий MessageHandler.
+    """
+    # Очищаем followup-данные
+    for key in ["analysis_for_followup", "followup_count",
+                "profile_name", "profile_birthdate",
+                "profile_birthcity", "profile_birthtime"]:
+        context.user_data.pop(key, None)
+    return ConversationHandler.END
+
+
 async def _send_long_message(update: Update, text: str, chunk_size: int = 4000):
     """Разбить длинное сообщение на части и отправить."""
     for i in range(0, len(text), chunk_size):
@@ -666,6 +687,9 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
     if extra_fallbacks:
         fallbacks = extra_fallbacks + fallbacks
 
+    # Фильтр кнопок меню
+    menu_filter = filters.TEXT & filters.Regex(MENU_BUTTONS_PATTERN)
+
     return ConversationHandler(
         entry_points=[CommandHandler("analyze", analyze_command)],
         states={
@@ -676,19 +700,24 @@ def build_analyze_conversation(extra_fallbacks=None) -> ConversationHandler:
                 CallbackQueryHandler(_menu_main_from_analyze, pattern="^menu_main$"),
             ],
             ASK_NAME: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, got_name)
+                MessageHandler(menu_filter, _menu_button_exits),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_name),
             ],
             ASK_BIRTHDATE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthdate)
+                MessageHandler(menu_filter, _menu_button_exits),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthdate),
             ],
             ASK_BIRTHCITY: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthcity)
+                MessageHandler(menu_filter, _menu_button_exits),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthcity),
             ],
             ASK_BIRTHTIME: [
+                MessageHandler(menu_filter, _menu_button_exits),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, got_birthtime),
                 CallbackQueryHandler(skip_birthtime_callback, pattern="^skip_birthtime$"),
             ],
             ASK_FOLLOWUP: [
+                MessageHandler(menu_filter, _menu_button_exits),
                 CallbackQueryHandler(followup_entry, pattern="^ask_followup$"),
                 CallbackQueryHandler(_menu_main_from_analyze, pattern="^menu_main$"),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, handle_followup_question),

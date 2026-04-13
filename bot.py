@@ -7,7 +7,7 @@
 
 import os
 
-BOT_VERSION = "2.5.2"
+BOT_VERSION = "2.5.7"
 
 # ========================
 # Админ
@@ -2290,6 +2290,10 @@ def build_application(token: str) -> Application:
         CallbackQueryHandler(menu_main_exits_conversation, pattern="^menu_main$"),
     ]
 
+    # Фильтр кнопок меню — ПЕРВЫЙ в каждом текстовом состоянии,
+    # чтобы кнопки не перехватывались catch-all text handler'ом
+    menu_filter = filters.TEXT & filters.Regex(MENU_BUTTONS_PATTERN)
+
     # Создание цели
     goal_conv = ConversationHandler(
         entry_points=[
@@ -2297,14 +2301,27 @@ def build_application(token: str) -> Application:
             CallbackQueryHandler(lambda u, c: newgoal_start(u, c), pattern="^new_goal$"),
         ],
         states={
-            GOAL_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_title_received)],
+            GOAL_TITLE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, goal_title_received),
+            ],
             GOAL_DESCRIPTION: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
                 CommandHandler("skip", goal_description_received),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, goal_description_received),
             ],
-            GOAL_DEADLINE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_deadline_received)],
-            GOAL_MILESTONES_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_milestones_count_received)],
-            GOAL_MILESTONE_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, goal_milestone_title_received)],
+            GOAL_DEADLINE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, goal_deadline_received),
+            ],
+            GOAL_MILESTONES_COUNT: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, goal_milestones_count_received),
+            ],
+            GOAL_MILESTONE_TITLE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, goal_milestone_title_received),
+            ],
             GOAL_CONFIRM: [CallbackQueryHandler(goal_confirm_callback, pattern="^(confirm_goal|cancel_goal_creation)$")],
         },
         fallbacks=common_fallbacks,
@@ -2319,11 +2336,26 @@ def build_application(token: str) -> Application:
             MessageHandler(filters.TEXT & filters.Regex("^👩‍🎓 Коуч$"), start_coach),
         ],
         states={
-            CQ_BUSINESS_AREA: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_business_area)],
-            CQ_EXPERIENCE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_experience)],
-            CQ_CHALLENGE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_challenge)],
-            CQ_TEAM_SIZE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_team_size)],
-            CQ_REVENUE: [MessageHandler(filters.TEXT & ~filters.COMMAND, cq_revenue)],
+            CQ_BUSINESS_AREA: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, cq_business_area),
+            ],
+            CQ_EXPERIENCE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, cq_experience),
+            ],
+            CQ_CHALLENGE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, cq_challenge),
+            ],
+            CQ_TEAM_SIZE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, cq_team_size),
+            ],
+            CQ_REVENUE: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
+                MessageHandler(filters.TEXT & ~filters.COMMAND, cq_revenue),
+            ],
         },
         fallbacks=common_fallbacks,
         allow_reentry=True,
@@ -2344,6 +2376,7 @@ def build_application(token: str) -> Application:
         ],
         states={
             EDIT_WAITING_TEXT: [
+                MessageHandler(menu_filter, menu_button_exits_conversation),
                 MessageHandler(filters.TEXT & ~filters.COMMAND, edit_waiting_text),
             ],
         },
